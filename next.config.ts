@@ -21,7 +21,6 @@ const nextConfig: NextConfig = {
 		? { output: "export" as const }
 		: { output: "standalone" as const }),
 	trailingSlash: true,
-	assetPrefix: "/",
 	reactCompiler: true,
 	productionBrowserSourceMaps: false,
 	outputFileTracingExcludes: {
