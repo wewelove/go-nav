@@ -27,7 +27,7 @@ import {
 	BiPlus,
 	BiChevronUp,
 	BiChevronDown,
-	BiGlobe,
+	BiGlobe
 } from "react-icons/bi";
 import type { NavCategory, WebsiteData, NavSite } from "@/types";
 import { useAtom, useAtomValue } from "jotai";
@@ -552,7 +552,7 @@ export function SitesEditor() {
 												<Table.Header>
 													<Table.Column className="w-12">图标</Table.Column>
 													<Table.Column
-														className="w-24 min-w-24 sm:w-40 sm:min-w-40"
+														className="w-28 min-w-28 sm:w-44 sm:min-w-44"
 														isRowHeader
 													>
 														名称
@@ -616,22 +616,37 @@ export function SitesEditor() {
 																	</div>
 																</Table.Cell>
 																<Table.Cell>
-																	<div className="flex flex-col gap-0.5">
-																		<span className="font-medium">
-																			{site.title}
-																		</span>
+																	<div
+																		className="font-medium"
+																		style={{
+																			display: "-webkit-box",
+																			WebkitLineClamp: 3,
+																			WebkitBoxOrient: "vertical",
+																			overflow: "hidden",
+																			wordBreak: "break-all",
+																		}}
+																	>
+																		{site.title}
 																	</div>
 																</Table.Cell>
-																<Table.Cell>
-																	<Link
-																		href={site.url}
-																		target="_blank"
-																		rel="noopener noreferrer"
-																		className="inline-flex items-center gap-1 text-xs truncate transition no-underline hover:underline"
-																	>
-																		<span className="truncate">{site.url}</span>
-																		<Link.Icon />
-																	</Link>
+																<Table.Cell className="max-w-[320px]">
+																	<div className="flex items-start gap-1">
+																		<Link
+																			href={site.url}
+																			target="_blank"
+																			rel="noopener noreferrer"
+																			className="block max-w-70 rounded-none pb-0.5 text-xs transition no-underline hover:underline"
+																			style={{
+																				display: "-webkit-box",
+																				WebkitLineClamp: 3,
+																				WebkitBoxOrient: "vertical",
+																				overflow: "hidden",
+																				wordBreak: "break-all",
+																			}}
+																		>
+																			{site.url}
+																		</Link>
+																	</div>
 																</Table.Cell>
 																<Table.Cell>
 																	<span className="line-clamp-2 text-default-500">
