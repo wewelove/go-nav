@@ -100,3 +100,23 @@ a[data-disabled] {
 .select__trigger {
 	padding-right: 16px !important;
 }
+
+.dark .input-group,
+:where(.dark) .input-group {
+	border: 1px solid var(--border) !important;
+}
+
+.dark .input,
+:where(.dark) .input {
+	border: 1px solid var(--border) !important;
+}
+
+.dark .number-field__group,
+:where(.dark) .number-field__group {
+	border: 1px solid var(--border) !important;
+}
+
+.dark .select__trigger,
+:where(.dark) .select__trigger {
+	border: 1px solid var(--border) !important;
+}

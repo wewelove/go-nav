@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, toast } from "@heroui/react";
+import { Button, TextArea, toast } from "@heroui/react";
 import { useSetAtom } from "jotai";
 import { BiSave } from "react-icons/bi";
 import { syncDataWithoutDirtyAtom } from "@/lib/store/admin";
@@ -115,14 +115,13 @@ export function SourceFileEditor() {
 				</Button>
 			</div>
 
-			<Card className="rounded-xl border border-gray-200 bg-white p-0 shadow-none dark:border-neutral-800 dark:bg-neutral-900">
-				<textarea
-					className="w-full min-h-125 resize-y rounded-xl border-0 bg-transparent p-4 font-mono text-sm text-gray-900 outline-none focus:ring-0 dark:text-neutral-100"
-					value={content}
-					onChange={(e) => setContent(e.target.value)}
-					spellCheck={false}
-				/>
-			</Card>
+			<TextArea
+				value={content}
+				onChange={(e) => setContent(e.target.value)}
+				spellCheck={false}
+				variant="secondary"
+				className={"min-h-125"}
+			/>
 		</div>
 	);
 }

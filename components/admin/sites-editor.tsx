@@ -13,10 +13,40 @@ import {
 	AlertDialog,
 	toast,
 	Drawer,
+	Spinner,
 	cn,
 	useOverlayState,
 } from "@heroui/react";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+	DndContext,
+	DragOverlay,
+	KeyboardSensor,
+	MeasuringStrategy,
+	PointerSensor,
+	TouchSensor,
+	closestCenter,
+	pointerWithin,
+	useDroppable,
+	useSensor,
+	useSensors,
+} from "@dnd-kit/core";
+import type {
+	CollisionDetection,
+	DragEndEvent,
+	DragOverEvent,
+	DragStartEvent,
+} from "@dnd-kit/core";
+import {
+	SortableContext,
+	arrayMove,
+	sortableKeyboardCoordinates,
+	useSortable,
+	verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
+import { createPortal } from "react-dom";
 import {
 	BiPencil,
 	BiTrash,
@@ -40,28 +70,6 @@ import {
 	resolveSiteBackgroundColor,
 	toPx,
 } from "../site-icon";
-import {
-	DndContext,
-	pointerWithin,
-	KeyboardSensor,
-	PointerSensor,
-	useSensor,
-	useSensors,
-	DragEndEvent,
-	DragOverEvent,
-	DragStartEvent,
-	DragOverlay,
-	MeasuringStrategy,
-	useDroppable,
-} from "@dnd-kit/core";
-import {
-	sortableKeyboardCoordinates,
-	useSortable,
-	arrayMove,
-	SortableContext,
-	verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 
 interface FlatCategory {
 	category: NavCategory;
@@ -110,53 +118,81 @@ function sameSet(a: Set<string>, b: Set<string>) {
 	return true;
 }
 
-/** 可排序的表格行，包裹 Table.Row 提供拖拽能力 */
-function SortableRow({
+const getSiteSortableId = (categoryId: string, index: number) =>
+	`site:${categoryId}:${index}`;
+
+const getCategoryDropId = (scope: string, categoryId: string) =>
+	`site-category:${scope}:${categoryId}`;
+
+const pointerWithinOrClosestCenter: CollisionDetection = (args) => {
+	const pointerCollisions = pointerWithin(args);
+	return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
+};
+
+interface SiteDragData {
+	type: "site";
+	sourceCategoryId: string;
+	sourceIndex: number;
+	site: NavSite;
+}
+
+interface CategoryDropData {
+	type: "category-drop";
+	categoryId: string;
+}
+
+function SortableSiteRow({
 	id,
 	site,
-	listIndex,
+	sourceCategoryId,
 	realIndex,
 	currentSites,
 	moveSite,
 	openEditModal,
 	setDeleteTarget,
 	defaultIconPadding,
+	registerRowElement,
 }: {
 	id: string;
 	site: NavSite;
-	listIndex: number;
+	sourceCategoryId: string;
 	realIndex: number;
 	currentSites: NavSite[];
-	moveSite: (siteId: string, direction: "up" | "down") => void;
+	moveSite: (index: number, direction: "up" | "down") => void;
 	openEditModal: (site: NavSite, index: number) => void;
 	setDeleteTarget: (index: number | null) => void;
 	defaultIconPadding?: string;
+	registerRowElement: (id: string, el: HTMLElement | null) => void;
 }) {
-	const {
-		attributes,
-		listeners,
-		setNodeRef,
-		transform,
-		transition,
-		isDragging,
-	} = useSortable({ id });
+	const { attributes, listeners, setNodeRef, transform, isDragging } =
+		useSortable({
+			id,
+			data: {
+				type: "site",
+				sourceCategoryId,
+				sourceIndex: realIndex,
+				site,
+			} satisfies SiteDragData,
+		});
 
-	const style = {
+	const style: React.CSSProperties = {
 		transform: CSS.Transform.toString(transform),
-		transition,
-		opacity: isDragging ? 0.5 : 1,
+		transition: undefined,
+		opacity: isDragging ? 0.45 : 1,
+		position: "relative",
+		zIndex: isDragging ? 1 : undefined,
 	};
-
-	const rowId = `${site.url}-${site.title}`;
 	const siteIconSrc = getIconImageSrc(site.icon);
 	const getResolvedIconPadding = (s?: NavSite | null) =>
 		resolveConfiguredValue(s?.iconPadding, defaultIconPadding);
 
 	return (
 		<Table.Row
-			ref={setNodeRef}
+			ref={(node) => {
+				setNodeRef(node);
+				registerRowElement(id, node);
+			}}
 			style={style}
-			key={id}
 			id={id}
 			textValue={site.title}
 		>
@@ -187,30 +223,49 @@ function SortableRow({
 				</div>
 			</Table.Cell>
 			<Table.Cell>
-				<div className="flex items-center gap-1">
-					<span
+				<div className="flex items-center gap-1.5">
+					<Button
 						{...attributes}
 						{...listeners}
-						className="cursor-grab text-default-400 hover:text-default-600 active:cursor-grabbing shrink-0"
 						aria-label="拖拽排序"
+						variant="ghost"
+						isIconOnly
+						className={"w-6! h-6!"}
 					>
 						<BiDotsVerticalRounded className="size-4" />
-					</span>
-					<div className="flex flex-col gap-0.5">
-						<span className="font-medium">{site.title}</span>
+					</Button>
+					<div
+						className="font-medium flex-1"
+						style={{
+							display: "-webkit-box",
+							WebkitLineClamp: 3,
+							WebkitBoxOrient: "vertical",
+							overflow: "hidden",
+							wordBreak: "break-all",
+						}}
+					>
+						{site.title}
 					</div>
 				</div>
 			</Table.Cell>
-			<Table.Cell>
-				<Link
-					href={site.url}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="inline-flex items-center gap-1 text-xs truncate transition no-underline hover:underline"
-				>
-					<span className="truncate">{site.url}</span>
-					<Link.Icon />
-				</Link>
+			<Table.Cell className="max-w-[320px]">
+				<div className="flex items-start gap-1">
+					<Link
+						href={site.url}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="block max-w-70 rounded-none pb-0.5 text-xs transition no-underline hover:underline"
+						style={{
+							display: "-webkit-box",
+							WebkitLineClamp: 3,
+							WebkitBoxOrient: "vertical",
+							overflow: "hidden",
+							wordBreak: "break-all",
+						}}
+					>
+						{site.url}
+					</Link>
+				</div>
 			</Table.Cell>
 			<Table.Cell>
 				<span className="line-clamp-2 text-default-500">
@@ -234,8 +289,9 @@ function SortableRow({
 						size="sm"
 						variant="outline"
 						aria-label="上移"
+						className="h-9 w-9"
 						isDisabled={realIndex <= 0}
-						onPress={() => moveSite(rowId, "up")}
+						onPress={() => moveSite(realIndex, "up")}
 					>
 						<BiChevronUp />
 					</Button>
@@ -244,8 +300,9 @@ function SortableRow({
 						size="sm"
 						variant="outline"
 						aria-label="下移"
+						className="h-9 w-9"
 						isDisabled={realIndex >= currentSites.length - 1}
-						onPress={() => moveSite(rowId, "down")}
+						onPress={() => moveSite(realIndex, "down")}
 					>
 						<BiChevronDown />
 					</Button>
@@ -254,6 +311,7 @@ function SortableRow({
 						size="sm"
 						variant="outline"
 						aria-label="编辑"
+						className="h-9 w-9"
 						onPress={() => openEditModal(site, realIndex)}
 					>
 						<BiPencil />
@@ -262,7 +320,7 @@ function SortableRow({
 						isIconOnly
 						size="sm"
 						variant="outline"
-						className="text-danger"
+						className="h-9 w-9 text-danger"
 						aria-label="删除"
 						onPress={() => setDeleteTarget(realIndex)}
 					>
@@ -274,7 +332,6 @@ function SortableRow({
 	);
 }
 
-/** 可作为拖放目标的分类按钮 */
 function DroppableCategoryButton({
 	cat,
 	isExpanded,
@@ -283,9 +340,9 @@ function DroppableCategoryButton({
 	toggleExpand,
 	handleSelectCategory,
 	renderIcon,
-	expandedKeys,
 	flatCategories,
 	renderTreeItem,
+	dropScope,
 	isDragOverCategory,
 }: {
 	cat: FlatCategory;
@@ -295,17 +352,20 @@ function DroppableCategoryButton({
 	toggleExpand: (id: string) => void;
 	handleSelectCategory: (id: string) => void;
 	renderIcon: (icon?: string) => React.ReactNode;
-	expandedKeys: Set<string>;
 	flatCategories: FlatCategory[];
-	renderTreeItem: (cat: FlatCategory) => React.ReactNode;
+	renderTreeItem: (cat: FlatCategory, dropScope: string) => React.ReactNode;
+	dropScope: string;
 	isDragOverCategory: boolean;
 }) {
 	const { setNodeRef, isOver } = useDroppable({
-		id: `category-${cat.id}`,
+		id: getCategoryDropId(dropScope, cat.id),
 		disabled: !isLeaf,
+		data: {
+			type: "category-drop",
+			categoryId: cat.id,
+		} satisfies CategoryDropData,
 	});
-	const showHighlight = isOver || isDragOverCategory;
-
+	const showHighlight = isLeaf && (isOver || isDragOverCategory);
 	const children = flatCategories.filter(
 		(c) =>
 			c.path.length === cat.path.length + 1 &&
@@ -331,8 +391,7 @@ function DroppableCategoryButton({
 						? "bg-blue-50 font-medium text-blue-600 dark:bg-blue-950/40 dark:text-blue-300"
 						: "hover:bg-default/50",
 					showHighlight &&
-						isLeaf &&
-						"ring-2 ring-blue-400 ring-offset-1 bg-blue-50 dark:bg-blue-950/40",
+						"bg-blue-50 ring-2 ring-blue-400 ring-offset-1 dark:bg-blue-950/40",
 				)}
 			>
 				<span className="inline-flex w-5 shrink-0 items-center justify-center">
@@ -360,8 +419,31 @@ function DroppableCategoryButton({
 				)}
 			</button>
 			{isExpanded && children.length > 0 && (
-				<div>{children.map((child) => renderTreeItem(child))}</div>
+				<div>{children.map((child) => renderTreeItem(child, dropScope))}</div>
 			)}
+		</div>
+	);
+}
+
+function SiteDragPreview({
+	rowHtml,
+	rowWidth,
+	columnWidths,
+}: {
+	rowHtml: string;
+	rowWidth: number;
+	columnWidths: number[];
+}) {
+	return (
+		<div className="pointer-events-none opacity-85" style={{ width: rowWidth }}>
+			<table className="w-full border-separate border-spacing-0">
+				<colgroup>
+					{columnWidths.map((width, index) => (
+						<col key={`drag-col-${index}`} style={{ width }} />
+					))}
+				</colgroup>
+				<tbody dangerouslySetInnerHTML={{ __html: rowHtml }} />
+			</table>
 		</div>
 	);
 }
@@ -371,6 +453,7 @@ export function SitesEditor() {
 	const nav = useAtomValue(navAtom);
 	const value: WebsiteData = { categories };
 	const onChange = (v: WebsiteData) => setCategories(v.categories);
+	const [isClientReady, setIsClientReady] = useState(false);
 	const [selectedCategory, setSelectedCategory] = useState<string | null>(() =>
 		findFirstSelectableCategoryId(categories),
 	);
@@ -386,6 +469,37 @@ export function SitesEditor() {
 	const knownExpandableIdsRef = useRef(collectExpandableIds(categories));
 	const mobileDrawerState = useOverlayState();
 	const defaultIconPadding = nav.layout?.defaultIconPadding;
+	const [activeSite, setActiveSite] = useState<NavSite | null>(null);
+	const [activeRowSnapshot, setActiveRowSnapshot] = useState<{
+		html: string;
+		width: number;
+		columnWidths: number[];
+	} | null>(null);
+	const rowElementMapRef = useRef(new Map<string, HTMLElement>());
+	const registerRowElement = (id: string, el: HTMLElement | null) => {
+		if (!el) {
+			rowElementMapRef.current.delete(id);
+			return;
+		}
+		rowElementMapRef.current.set(id, el);
+	};
+	const [dragOverCategoryId, setDragOverCategoryId] = useState<string | null>(
+		null,
+	);
+	const sensors = useSensors(
+		useSensor(PointerSensor, {
+			activationConstraint: { distance: 6 },
+		}),
+		useSensor(TouchSensor, {
+			activationConstraint: {
+				delay: 120,
+				tolerance: 8,
+			},
+		}),
+		useSensor(KeyboardSensor, {
+			coordinateGetter: sortableKeyboardCoordinates,
+		}),
+	);
 
 	const flatCategories = useMemo(() => {
 		const result: FlatCategory[] = [];
@@ -412,6 +526,10 @@ export function SitesEditor() {
 		walk(value.categories, 0, []);
 		return result;
 	}, [value.categories]);
+
+	useEffect(() => {
+		setIsClientReady(true);
+	}, []);
 
 	useEffect(() => {
 		const nextExpandableIds = collectExpandableIds(value.categories);
@@ -466,141 +584,178 @@ export function SitesEditor() {
 		);
 	}, [currentSites, search]);
 
+	const sortableSiteIds = useMemo(() => {
+		if (!selectedCategory) return [];
+		return filteredSites.map((site) =>
+			getSiteSortableId(selectedCategory, currentSites.indexOf(site)),
+		);
+	}, [currentSites, filteredSites, selectedCategory]);
+
+	if (!isClientReady) {
+		return (
+			<div
+				className="flex flex-col items-center justify-center gap-2"
+				style={{
+					height: `calc(100dvh - 106px)`,
+				}}
+			>
+				<Spinner size="sm" />
+				<span className="text-xs text-default-500">加载中...</span>
+			</div>
+		);
+	}
+
+	const findCategoryById = (
+		cats: NavCategory[],
+		categoryId: string,
+	): NavCategory | null => {
+		for (const category of cats) {
+			if (category.id === categoryId) return category;
+			if (category.children?.length) {
+				const found = findCategoryById(category.children, categoryId);
+				if (found) return found;
+			}
+		}
+		return null;
+	};
+
+	const updateCategorySites = (
+		cats: NavCategory[],
+		categoryId: string,
+		updater: (sites: NavSite[]) => NavSite[],
+	): NavCategory[] =>
+		cats.map((c) => {
+			if (c.id === categoryId) {
+				return { ...c, sites: updater(c.sites ?? []) };
+			}
+			if (c.children) {
+				return {
+					...c,
+					children: updateCategorySites(c.children, categoryId, updater),
+				};
+			}
+			return c;
+		});
+
 	const updateSites = (updater: (sites: NavSite[]) => NavSite[]) => {
 		if (!selectedCategory) return null;
-		const deepUpdate = (cats: NavCategory[]): NavCategory[] =>
-			cats.map((c) => {
-				if (c.id === selectedCategory) {
-					return { ...c, sites: updater(c.sites ?? []) };
-				}
-				if (c.children) return { ...c, children: deepUpdate(c.children) };
-				return c;
-			});
-		const newData = { ...value, categories: deepUpdate(value.categories) };
+		const newData = {
+			...value,
+			categories: updateCategorySites(
+				value.categories,
+				selectedCategory,
+				updater,
+			),
+		};
 		onChange(newData);
 		return newData;
 	};
 
-	// ---- 拖拽相关状态 ----
-	const [activeId, setActiveId] = useState<string | null>(null);
-	const [dragOverCategoryId, setDragOverCategoryId] = useState<string | null>(
-		null,
-	);
-	const sensors = useSensors(
-		useSensor(PointerSensor, {
-			activationConstraint: { distance: 5 },
-		}),
-		useSensor(KeyboardSensor, {
-			coordinateGetter: sortableKeyboardCoordinates,
-		}),
-	);
-
-	/** 从当前分类中移除指定网址，并添加到目标分类末尾 */
-	const moveSiteToCategory = useCallback(
-		(siteKey: string, targetCategoryId: string) => {
-			if (!selectedCategory || selectedCategory === targetCategoryId) return;
-			const findCat = (cats: NavCategory[]): NavCategory | null => {
-				for (const c of cats) {
-					if (c.id === selectedCategory) return c;
-					if (c.children) {
-						const found = findCat(c.children);
-						if (found) return found;
-					}
-				}
-				return null;
-			};
-			const sourceCat = findCat(value.categories);
-			if (!sourceCat?.sites) return;
-			const siteIndex = sourceCat.sites.findIndex(
-				(s) => `${s.url}-${s.title}` === siteKey,
-			);
-			if (siteIndex < 0) return;
-			const site = sourceCat.sites[siteIndex];
-
-			const deepUpdate = (cats: NavCategory[]): NavCategory[] =>
-				cats.map((c) => {
-					if (c.id === selectedCategory) {
-						return {
-							...c,
-							sites: (c.sites ?? []).filter((_, i) => i !== siteIndex),
-						};
-					}
-					if (c.id === targetCategoryId) {
-						return { ...c, sites: [...(c.sites ?? []), site] };
-					}
-					if (c.children) return { ...c, children: deepUpdate(c.children) };
-					return c;
-				});
-			const newData = { ...value, categories: deepUpdate(value.categories) };
-			onChange(newData);
-			toast.success(`已将"${site.title}"移动到目标分类`);
-		},
-		[selectedCategory, value, onChange],
-	);
-
-	const handleDragStart = useCallback((event: DragStartEvent) => {
-		setActiveId(String(event.active.id));
-	}, []);
-
-	const handleDragOver = useCallback((event: DragOverEvent) => {
-		const { over } = event;
-		if (!over) {
-			setDragOverCategoryId(null);
+	const moveSiteToCategory = (
+		sourceCategoryId: string,
+		sourceIndex: number,
+		targetCategoryId: string,
+	) => {
+		if (sourceCategoryId === targetCategoryId) return;
+		const sourceCategory = findCategoryById(value.categories, sourceCategoryId);
+		const targetCategory = findCategoryById(value.categories, targetCategoryId);
+		if (!sourceCategory || !targetCategory) return;
+		if ((targetCategory.children?.length ?? 0) > 0) {
+			toast.warning("网址只能拖动到子分类");
 			return;
 		}
-		const overId = String(over.id);
-		if (overId.startsWith("category-")) {
-			setDragOverCategoryId(overId.replace("category-", ""));
-		} else {
-			setDragOverCategoryId(null);
+		const site = sourceCategory.sites?.[sourceIndex];
+		if (!site) return;
+
+		let nextCategories = updateCategorySites(
+			value.categories,
+			sourceCategoryId,
+			(sites) => sites.filter((_, index) => index !== sourceIndex),
+		);
+		nextCategories = updateCategorySites(
+			nextCategories,
+			targetCategoryId,
+			(sites) => [...sites, site],
+		);
+		onChange({ ...value, categories: nextCategories });
+		toast.success(
+			`已将"${site.title}"移动到"${getCategoryPath(targetCategoryId)}"，记得点击保存`,
+		);
+	};
+
+	const handleSiteDragOver = (event: DragOverEvent) => {
+		const data = event.over?.data.current as
+			| SiteDragData
+			| CategoryDropData
+			| undefined;
+		if (data?.type === "category-drop") {
+			setDragOverCategoryId(data.categoryId);
+			return;
 		}
-	}, []);
+		setDragOverCategoryId(null);
+	};
 
-	const handleDragEnd = useCallback(
-		(event: DragEndEvent) => {
-			const { active, over } = event;
-			setActiveId(null);
-			setDragOverCategoryId(null);
+	const handleSiteDragStart = (event: DragStartEvent) => {
+		const data = event.active.data.current;
+		if (data?.type === "site") {
+			setActiveSite((data as SiteDragData).site);
+		}
+		const rowElement = rowElementMapRef.current.get(String(event.active.id));
+		if (rowElement) {
+			const rect = rowElement.getBoundingClientRect();
+			const columnWidths = Array.from(rowElement.children).map(
+				(cell) => (cell as HTMLElement).getBoundingClientRect().width,
+			);
+			setActiveRowSnapshot({
+				html: rowElement.outerHTML,
+				width: rect.width,
+				columnWidths,
+			});
+			return;
+		}
+		setActiveRowSnapshot(null);
+	};
 
-			if (!over) return;
+	const handleSiteDragEnd = (event: DragEndEvent) => {
+		setActiveSite(null);
+		setActiveRowSnapshot(null);
+		setDragOverCategoryId(null);
 
-			const activeIdStr = String(active.id);
-			const overIdStr = String(over.id);
+		const activeData = event.active.data.current as SiteDragData | undefined;
+		const overData = event.over?.data.current as
+			| SiteDragData
+			| CategoryDropData
+			| undefined;
+		if (!activeData || !overData || activeData.type !== "site") return;
 
-			// 拖拽到分类按钮上 → 跨分类移动
-			if (overIdStr.startsWith("category-")) {
-				const targetCatId = overIdStr.replace("category-", "");
-				const lastDashIndex = activeIdStr.lastIndexOf("-");
-				const siteKey =
-					lastDashIndex > 0
-						? activeIdStr.substring(0, lastDashIndex)
-						: activeIdStr;
-				moveSiteToCategory(siteKey, targetCatId);
-				return;
-			}
+		if (overData.type === "category-drop") {
+			moveSiteToCategory(
+				activeData.sourceCategoryId,
+				activeData.sourceIndex,
+				overData.categoryId,
+			);
+			return;
+		}
 
-			// 同分类内排序
-			if (activeIdStr !== overIdStr && selectedCategory) {
-				updateSites((sites) => {
-					const extractKey = (id: string) => {
-						const idx = id.lastIndexOf("-");
-						return idx > 0 ? id.substring(0, idx) : id;
-					};
-					const activeKey = extractKey(activeIdStr);
-					const overKey = extractKey(overIdStr);
-					const oldIndex = sites.findIndex(
-						(s) => `${s.url}-${s.title}` === activeKey,
-					);
-					const newIndex = sites.findIndex(
-						(s) => `${s.url}-${s.title}` === overKey,
-					);
-					if (oldIndex < 0 || newIndex < 0) return sites;
-					return arrayMove(sites, oldIndex, newIndex);
-				});
-			}
-		},
-		[selectedCategory, updateSites, moveSiteToCategory],
-	);
+		if (
+			overData.type !== "site" ||
+			activeData.sourceCategoryId !== overData.sourceCategoryId ||
+			activeData.sourceIndex === overData.sourceIndex
+		) {
+			return;
+		}
+
+		const newData = {
+			...value,
+			categories: updateCategorySites(
+				value.categories,
+				activeData.sourceCategoryId,
+				(sites) =>
+					arrayMove(sites, activeData.sourceIndex, overData.sourceIndex),
+			),
+		};
+		onChange(newData);
+	};
 
 	const openAddModal = () => {
 		setEditingSite({
@@ -724,16 +879,12 @@ export function SitesEditor() {
 		setDeleteTarget(null);
 	};
 
-	const moveSite = (siteId: string, direction: "up" | "down") => {
+	const moveSite = (index: number, direction: "up" | "down") => {
 		updateSites((sites) => {
-			const index = sites.findIndex((s) => `${s.url}-${s.title}` === siteId);
 			if (index < 0) return sites;
 			const newIndex = direction === "up" ? index - 1 : index + 1;
 			if (newIndex < 0 || newIndex >= sites.length) return sites;
-			const copy = sites.slice();
-			const [moved] = copy.splice(index, 1);
-			copy.splice(newIndex, 0, moved);
-			return copy;
+			return arrayMove(sites, index, newIndex);
 		});
 	};
 
@@ -771,18 +922,15 @@ export function SitesEditor() {
 		if (!icon) return <span className="h-5 w-5 shrink-0" aria-hidden />;
 		const iconSrc = getIconImageSrc(icon);
 		if (iconSrc) {
-			// eslint-disable-next-line @next/next/no-img-element
 			return (
+				// eslint-disable-next-line @next/next/no-img-element
 				<img src={iconSrc} alt="" className="h-5 w-5 rounded object-contain" />
 			);
 		}
 		return <span className="w-5 text-center text-base">{icon}</span>;
 	};
 
-	const getResolvedIconPadding = (site?: NavSite | null) =>
-		resolveConfiguredValue(site?.iconPadding, defaultIconPadding);
-
-	const renderTreeItem = (cat: FlatCategory) => {
+	const renderTreeItem = (cat: FlatCategory, dropScope: string) => {
 		const isExpanded = expandedKeys.has(cat.id);
 		const isSelected = selectedCategory === cat.id;
 		const isLeaf = !cat.hasChildren;
@@ -797,15 +945,15 @@ export function SitesEditor() {
 				toggleExpand={toggleExpand}
 				handleSelectCategory={handleSelectCategory}
 				renderIcon={renderIcon}
-				expandedKeys={expandedKeys}
 				flatCategories={flatCategories}
 				renderTreeItem={renderTreeItem}
+				dropScope={dropScope}
 				isDragOverCategory={dragOverCategoryId === cat.id}
 			/>
 		);
 	};
 
-	const renderCategoryList = () => {
+	const renderCategoryList = (dropScope: string) => {
 		const rootCategories = flatCategories.filter((c) => c.level === 0);
 
 		if (rootCategories.length === 0) {
@@ -818,23 +966,27 @@ export function SitesEditor() {
 
 		return (
 			<div className="flex flex-col gap-0.5">
-				{rootCategories.map((cat) => renderTreeItem(cat))}
+				{rootCategories.map((cat) => renderTreeItem(cat, dropScope))}
 			</div>
 		);
 	};
 
 	return (
 		<DndContext
-			id="sites-dnd-context"
 			sensors={sensors}
-			collisionDetection={pointerWithin}
-			onDragStart={handleDragStart}
-			onDragOver={handleDragOver}
-			onDragEnd={handleDragEnd}
+			collisionDetection={pointerWithinOrClosestCenter}
 			measuring={{
 				droppable: {
 					strategy: MeasuringStrategy.Always,
 				},
+			}}
+			onDragOver={handleSiteDragOver}
+			onDragStart={handleSiteDragStart}
+			onDragEnd={handleSiteDragEnd}
+			onDragCancel={() => {
+				setActiveSite(null);
+				setActiveRowSnapshot(null);
+				setDragOverCategoryId(null);
 			}}
 		>
 			<div className="flex h-[calc(100vh-106px)] flex-col gap-4">
@@ -844,7 +996,7 @@ export function SitesEditor() {
 							<h3 className="text-sm font-semibold">选择分类</h3>
 						</div>
 						<div className="flex-1 overflow-y-auto p-2 overscroll-none">
-							{renderCategoryList()}
+							{renderCategoryList("desktop")}
 						</div>
 					</div>
 
@@ -862,7 +1014,7 @@ export function SitesEditor() {
 								</Button>
 							</div>
 						) : (
-							<div className="flex h-full flex-col gap-4 overflow-y-scroll overscroll-none">
+							<div className="flex h-full flex-col gap-4 overflow-y-scroll overscroll-none p-1 -m-1">
 								<div className="flex flex-col gap-4 flex-wrap sm:flex-row sm:items-center sm:justify-between">
 									<div className="flex items-center gap-2 pt-1">
 										<span className="truncate font-medium text-lg!">
@@ -902,12 +1054,11 @@ export function SitesEditor() {
 										<Button
 											variant="primary"
 											size="sm"
-											className="shrink-0"
+											className="shrink-0 h-9"
 											onPress={openAddModal}
 										>
 											<BiPlus data-icon="inline-start" />
-											<span className="hidden sm:inline">新增网址</span>
-											<span className="sm:hidden">新增</span>
+											<span>新增网址</span>
 										</Button>
 									</div>
 								</div>
@@ -922,66 +1073,66 @@ export function SitesEditor() {
 											</p>
 										</div>
 									) : (
-										<Table variant="secondary" aria-label="网址列表">
-											<Table.ScrollContainer>
-												<Table.Content aria-label="网址列表">
-													<Table.Header>
-														<Table.Column className="w-12">图标</Table.Column>
-														<Table.Column
-															className="w-28 min-w-28 sm:w-44 sm:min-w-44"
-															isRowHeader
-														>
-															名称
-														</Table.Column>
-														<Table.Column className="min-w-48">
-															URL
-														</Table.Column>
-														<Table.Column className="min-w-40">
-															描述
-														</Table.Column>
-														<Table.Column className="min-w-32">
-															标签
-														</Table.Column>
-														<Table.Column className="w-24 min-w-24">
-															操作
-														</Table.Column>
-													</Table.Header>
-													<Table.Body
-														renderEmptyState={() => (
-															<div className="py-12 text-center text-sm text-default-500">
-																暂无数据
-															</div>
-														)}
-													>
-														<SortableContext
-															items={filteredSites.map(
-																(s, i) => `${s.url}-${s.title}-${i}`,
+										<SortableContext
+											items={sortableSiteIds}
+											strategy={verticalListSortingStrategy}
+										>
+											<Table variant="secondary" aria-label="网址列表">
+												<Table.ScrollContainer>
+													<Table.Content aria-label="网址列表">
+														<Table.Header>
+															<Table.Column className="w-12">图标</Table.Column>
+															<Table.Column
+																className="min-w-28 sm:min-w-44"
+																isRowHeader
+															>
+																名称
+															</Table.Column>
+															<Table.Column className="min-w-60">
+																URL
+															</Table.Column>
+															<Table.Column className="min-w-52">
+																描述
+															</Table.Column>
+															<Table.Column className="min-w-40">
+																标签
+															</Table.Column>
+															<Table.Column className="w-24">操作</Table.Column>
+														</Table.Header>
+														<Table.Body
+															renderEmptyState={() => (
+																<div className="py-12 text-center text-sm text-default-500">
+																	暂无数据
+																</div>
 															)}
-															strategy={verticalListSortingStrategy}
 														>
-															{filteredSites.map((site, listIndex) => {
+															{filteredSites.map((site) => {
 																const realIndex = currentSites.indexOf(site);
-																const uniqueKey = `${site.url}-${site.title}-${listIndex}`;
+																const sortableId = getSiteSortableId(
+																	selectedCategory,
+																	realIndex,
+																);
 																return (
-																	<SortableRow
-																		key={uniqueKey}
-																		id={uniqueKey}
+																	<SortableSiteRow
+																		key={sortableId}
+																		id={sortableId}
 																		site={site}
-																		listIndex={listIndex}
+																		sourceCategoryId={selectedCategory}
 																		realIndex={realIndex}
 																		currentSites={currentSites}
 																		moveSite={moveSite}
 																		openEditModal={openEditModal}
 																		setDeleteTarget={setDeleteTarget}
 																		defaultIconPadding={defaultIconPadding}
+																		registerRowElement={registerRowElement}
 																	/>
 																);
 															})}
-														</SortableContext>
-													</Table.Body>
-												</Table.Content>
-											</Table.ScrollContainer>
-										</Table>
+														</Table.Body>
+													</Table.Content>
+												</Table.ScrollContainer>
+											</Table>
+										</SortableContext>
 									)}
 								</div>
 							</div>
@@ -1010,7 +1161,7 @@ export function SitesEditor() {
 									</Drawer.Heading>
 								</Drawer.Header>
 								<Drawer.Body className="overflow-y-auto">
-									{renderCategoryList()}
+									{renderCategoryList("drawer")}
 								</Drawer.Body>
 							</Drawer.Dialog>
 						</Drawer.Content>
@@ -1172,48 +1323,22 @@ export function SitesEditor() {
 					</AlertDialog.Backdrop>
 				</AlertDialog>
 			</div>
-			<DragOverlay style={{ cursor: "grabbing" }}>
-				{activeId
-					? (() => {
-							const site = currentSites.find(
-								(s) =>
-									`${s.url}-${s.title}-${currentSites.indexOf(s)}` === activeId,
-							);
-							if (!site) return null;
-							const siteIconSrc = getIconImageSrc(site.icon);
-							return (
-								<div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 shadow-lg dark:border-blue-800 dark:bg-blue-950/60 max-w-48">
-									<div
-										className="flex h-6 w-6 shrink-0 items-center justify-center rounded"
-										style={{
-											backgroundColor: resolveSiteBackgroundColor(site.bgColor),
-										}}
-									>
-										{site.icon ? (
-											siteIconSrc ? (
-												// eslint-disable-next-line @next/next/no-img-element
-												<img
-													src={siteIconSrc}
-													alt=""
-													className="h-4 w-4 rounded object-contain"
-												/>
-											) : (
-												<span className="text-sm">{site.icon}</span>
-											)
-										) : (
-											<span className="text-xs font-bold text-default-500">
-												{site.title.charAt(0)}
-											</span>
-										)}
-									</div>
-									<span className="truncate text-sm font-medium text-blue-700 dark:text-blue-300">
-										{site.title}
-									</span>
-								</div>
-							);
-						})()
-					: null}
-			</DragOverlay>
+			{createPortal(
+				<DragOverlay dropAnimation={null}>
+					{activeSite && activeRowSnapshot ? (
+						<SiteDragPreview
+							rowHtml={activeRowSnapshot.html}
+							rowWidth={activeRowSnapshot.width}
+							columnWidths={activeRowSnapshot.columnWidths}
+						/>
+					) : activeSite ? (
+						<div className="rounded-md border border-default bg-background px-2 py-1 text-sm shadow-lg">
+							{activeSite.title}
+						</div>
+					) : null}
+				</DragOverlay>,
+				document.body,
+			)}
 		</DndContext>
 	);
 }

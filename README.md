@@ -18,6 +18,12 @@ Go Nav 同时支持两种部署形态：
 - 官网：[https://www.gotab.cn](https://www.gotab.cn)
 - 项目预览：[https://nav.gotab.cn](https://nav.gotab.cn)
 
+## 推广信息
+
+没有云服务器，或者正准备购买云服务器的朋友，可以看下我的推广：
+
+- [🔥 雨云服务器，高性价比，简洁易用的面板，值得您的信赖](https://www.rainyun.com/gotab_)
+
 ## 交流群
 
 欢迎加入 QQ 交流群一起反馈问题、交流部署和分享使用经验。

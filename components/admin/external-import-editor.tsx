@@ -612,7 +612,7 @@ export function ExternalImportEditor() {
 												<Table.Header>
 													<Table.Column className="w-12">图标</Table.Column>
 													<Table.Column
-														className="w-28 min-w-28 sm:w-44 sm:min-w-44"
+														className="min-w-28 sm:min-w-44"
 														isRowHeader
 													>
 														名称
