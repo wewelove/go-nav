@@ -59,10 +59,13 @@ import {
 	BiChevronDown,
 	BiGlobe,
 	BiDotsVerticalRounded,
+	BiImage,
 } from "react-icons/bi";
 import type { NavCategory, WebsiteData, NavSite } from "@/types";
 import { useAtom, useAtomValue } from "jotai";
 import { categoriesAtom, navAtom } from "@/lib/store/admin";
+import { uploadImageWithCompression } from "@/lib/client/image-upload";
+import { getPreferredSiteHref } from "@/lib/client/site-link";
 import { getIconImageSrc } from "@/lib/icon";
 import { IconPicker } from "./icon-picker";
 import {
@@ -151,6 +154,7 @@ function SortableSiteRow({
 	openEditModal,
 	setDeleteTarget,
 	defaultIconPadding,
+	autoUseIntranet,
 	registerRowElement,
 }: {
 	id: string;
@@ -162,6 +166,7 @@ function SortableSiteRow({
 	openEditModal: (site: NavSite, index: number) => void;
 	setDeleteTarget: (index: number | null) => void;
 	defaultIconPadding?: string;
+	autoUseIntranet?: boolean;
 	registerRowElement: (id: string, el: HTMLElement | null) => void;
 }) {
 	const { attributes, listeners, setNodeRef, transform, isDragging } =
@@ -183,6 +188,7 @@ function SortableSiteRow({
 		zIndex: isDragging ? 1 : undefined,
 	};
 	const siteIconSrc = getIconImageSrc(site.icon);
+	const resolvedHref = getPreferredSiteHref(site, { autoUseIntranet });
 	const getResolvedIconPadding = (s?: NavSite | null) =>
 		resolveConfiguredValue(s?.iconPadding, defaultIconPadding);
 
@@ -251,7 +257,7 @@ function SortableSiteRow({
 			<Table.Cell className="max-w-[320px]">
 				<div className="flex items-start gap-1">
 					<Link
-						href={site.url}
+						href={resolvedHref}
 						target="_blank"
 						rel="noopener noreferrer"
 						className="block max-w-70 rounded-none pb-0.5 text-xs transition no-underline hover:underline"
@@ -267,10 +273,45 @@ function SortableSiteRow({
 					</Link>
 				</div>
 			</Table.Cell>
+			<Table.Cell className="max-w-[320px]">
+				{site.intranetUrl ? (
+					<div className="flex items-start gap-1">
+						<Link
+							href={site.intranetUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="block max-w-70 rounded-none pb-0.5 text-xs transition no-underline hover:underline"
+							style={{
+								display: "-webkit-box",
+								WebkitLineClamp: 3,
+								WebkitBoxOrient: "vertical",
+								overflow: "hidden",
+								wordBreak: "break-all",
+							}}
+						>
+							{site.intranetUrl}
+						</Link>
+					</div>
+				) : (
+					<span className="text-default-500">-</span>
+				)}
+			</Table.Cell>
 			<Table.Cell>
 				<span className="line-clamp-2 text-default-500">
 					{site.description || "-"}
 				</span>
+			</Table.Cell>
+			<Table.Cell>
+				{site.previewImage ? (
+					// eslint-disable-next-line @next/next/no-img-element
+					<img
+						src={site.previewImage}
+						alt=""
+						className="h-10 w-16 rounded-lg border border-default object-cover"
+					/>
+				) : (
+					<span className="text-default-500">-</span>
+				)}
 			</Table.Cell>
 			<Table.Cell>
 				<div className="flex flex-wrap gap-1">
@@ -448,6 +489,105 @@ function SiteDragPreview({
 	);
 }
 
+function PreviewImagePicker({
+	value,
+	onChange,
+}: {
+	value?: string;
+	onChange: (v: string) => void;
+}) {
+	const fileRef = useRef<HTMLInputElement>(null);
+	const [uploading, setUploading] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+
+	const onFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const f = e.target.files?.[0];
+		e.target.value = "";
+		if (!f) return;
+		await uploadFile(f);
+	};
+
+	const uploadFile = async (f: File) => {
+		setUploading(true);
+		setErr(null);
+		try {
+			const url = await uploadImageWithCompression(f, {
+				maxEdge: 1600,
+				quality: 0.84,
+			});
+			onChange(url);
+		} catch (e) {
+			setErr((e as Error).message);
+		} finally {
+			setUploading(false);
+		}
+	};
+
+	const onPasteImage = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+		const file = e.clipboardData.items
+			? Array.from(e.clipboardData.items)
+				.find((item) => item.kind === "file" && item.type.startsWith("image/"))
+				?.getAsFile()
+			: null;
+		if (!file) return;
+		e.preventDefault();
+		await uploadFile(file);
+	};
+
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-center gap-2">
+				<div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-default bg-default/30">
+					{value ? (
+						// eslint-disable-next-line @next/next/no-img-element
+						<img src={value} alt="" className="h-full w-full object-cover" />
+					) : (
+						<span className="text-xs text-default-500">无预览图</span>
+					)}
+				</div>
+				<TextField
+					className="min-w-0 flex-1"
+					value={value ?? ""}
+					onChange={onChange}
+				>
+					<Label className="sr-only">预览图</Label>
+					<Input
+						placeholder="/uploads/preview.webp 或 https://..."
+						onPaste={onPasteImage}
+					/>
+				</TextField>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					isDisabled={uploading}
+					onPress={() => fileRef.current?.click()}
+				>
+					{uploading ? "上传中..." : "上传"}
+				</Button>
+				{value ? (
+					<Button
+						type="button"
+						variant="tertiary"
+						size="sm"
+						onPress={() => onChange("")}
+					>
+						清除
+					</Button>
+				) : null}
+				<input
+					ref={fileRef}
+					type="file"
+					accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+					className="hidden"
+					onChange={onFileChosen}
+				/>
+			</div>
+			{err ? <span className="text-xs text-danger">{err}</span> : null}
+		</div>
+	);
+}
+
 export function SitesEditor() {
 	const [categories, setCategories] = useAtom(categoriesAtom);
 	const nav = useAtomValue(navAtom);
@@ -463,12 +603,14 @@ export function SitesEditor() {
 	const [editingIndex, setEditingIndex] = useState<number>(-1);
 	const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 	const [fetchingInfo, setFetchingInfo] = useState(false);
+	const [capturingPreview, setCapturingPreview] = useState(false);
 	const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
 		collectExpandableIds(categories),
 	);
 	const knownExpandableIdsRef = useRef(collectExpandableIds(categories));
 	const mobileDrawerState = useOverlayState();
 	const defaultIconPadding = nav.layout?.defaultIconPadding;
+	const autoUseIntranet = nav.layout?.autoUseIntranet;
 	const [activeSite, setActiveSite] = useState<NavSite | null>(null);
 	const [activeRowSnapshot, setActiveRowSnapshot] = useState<{
 		html: string;
@@ -579,6 +721,7 @@ export function SitesEditor() {
 			(s) =>
 				s.title.toLowerCase().includes(q) ||
 				s.url.toLowerCase().includes(q) ||
+				s.intranetUrl?.toLowerCase().includes(q) ||
 				s.description?.toLowerCase().includes(q) ||
 				s.tags?.some((t) => t.toLowerCase().includes(q)),
 		);
@@ -762,7 +905,9 @@ export function SitesEditor() {
 			title: "",
 			description: "",
 			url: "https://",
+			intranetUrl: "",
 			icon: "",
+			previewImage: "",
 			bgColor: "rgba(255, 255, 255, 0)",
 			iconPadding: "",
 			tags: [],
@@ -864,11 +1009,55 @@ export function SitesEditor() {
 				}
 			}
 
+			if (!editingSite?.previewImage) {
+				try {
+					const previewRes = await fetch("/api/tools/capturePreview", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ url: editingSite.url }),
+					});
+					if (previewRes.ok) {
+						const previewData = (await previewRes.json()) as { url: string };
+						setEditingSite((prev) =>
+							prev ? { ...prev, previewImage: previewData.url } : prev,
+						);
+					}
+				} catch {
+					// 预览图获取失败不影响基础信息
+				}
+			}
+
 			toast.success("网站信息获取成功");
 		} catch (e) {
 			toast.warning((e as Error).message || "获取网站信息失败");
 		} finally {
 			setFetchingInfo(false);
+		}
+	};
+
+	const captureWebsitePreview = async () => {
+		if (!editingSite?.url?.trim()) {
+			toast.warning("请先输入网站地址");
+			return;
+		}
+		setCapturingPreview(true);
+		try {
+			const res = await fetch("/api/tools/capturePreview", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url: editingSite.url }),
+			});
+			if (!res.ok) {
+				const data = (await res.json().catch(() => ({}))) as { error?: string };
+				throw new Error(data.error || "获取预览图失败");
+			}
+			const data = (await res.json()) as { url: string };
+			setEditingSite((prev) => (prev ? { ...prev, previewImage: data.url } : prev));
+			toast.success("预览图获取成功");
+		} catch (e) {
+			toast.warning((e as Error).message || "获取预览图失败");
+		} finally {
+			setCapturingPreview(false);
 		}
 	};
 
@@ -1080,19 +1269,25 @@ export function SitesEditor() {
 											<Table variant="secondary" aria-label="网址列表">
 												<Table.ScrollContainer>
 													<Table.Content aria-label="网址列表">
-														<Table.Header>
-															<Table.Column className="w-12">图标</Table.Column>
-															<Table.Column
-																className="min-w-28 sm:min-w-44"
+										<Table.Header>
+											<Table.Column className="w-12">图标</Table.Column>
+											<Table.Column
+												className="min-w-28 sm:min-w-44"
 																isRowHeader
 															>
 																名称
 															</Table.Column>
-															<Table.Column className="min-w-60">
-																URL
-															</Table.Column>
-															<Table.Column className="min-w-52">
-																描述
+											<Table.Column className="min-w-60">
+												公网 URL
+											</Table.Column>
+											<Table.Column className="min-w-60">
+												内网 URL
+											</Table.Column>
+											<Table.Column className="min-w-52">
+												描述
+											</Table.Column>
+															<Table.Column className="w-24">
+																预览图
 															</Table.Column>
 															<Table.Column className="min-w-40">
 																标签
@@ -1124,6 +1319,7 @@ export function SitesEditor() {
 																		openEditModal={openEditModal}
 																		setDeleteTarget={setDeleteTarget}
 																		defaultIconPadding={defaultIconPadding}
+																		autoUseIntranet={autoUseIntranet}
 																		registerRowElement={registerRowElement}
 																	/>
 																);
@@ -1201,19 +1397,43 @@ export function SitesEditor() {
 											<InputGroup>
 												<InputGroup.Input placeholder="https://..." />
 												<InputGroup.Suffix className="p-1!">
-													<Button
-														size="sm"
-														variant="tertiary"
-														className={"rounded-lg"}
-														isDisabled={fetchingInfo}
-														onPress={fetchWebsiteInfo}
-													>
-														<BiGlobe className="size-4" />
-														获取信息
-													</Button>
+													<div className="flex gap-1">
+														<Button
+															size="sm"
+															variant="tertiary"
+															className={"rounded-lg"}
+															isDisabled={fetchingInfo || capturingPreview}
+															onPress={fetchWebsiteInfo}
+														>
+															<BiGlobe className="size-4" />
+															获取信息
+														</Button>
+														<Button
+															size="sm"
+															variant="tertiary"
+															className={"rounded-lg"}
+															isDisabled={fetchingInfo || capturingPreview}
+															onPress={captureWebsitePreview}
+														>
+															<BiImage className="size-4" />
+															获取预览图
+														</Button>
+													</div>
 												</InputGroup.Suffix>
 											</InputGroup>
 										</TextField>
+										<TextField
+											value={editingSite?.intranetUrl ?? ""}
+											onChange={(v) =>
+												setEditingSite({ ...editingSite!, intranetUrl: v })
+											}
+										>
+											<Label>内网地址（可选）</Label>
+											<Input placeholder="http://192.168.x.x:xxxx" />
+										</TextField>
+										<p className="text-xs text-default-500 -mt-2">
+											可自动抓取网站首屏截图作为预览图；部分站点会因反爬策略导致抓取失败。
+										</p>
 										<TextField
 											value={editingSite?.title ?? ""}
 											onChange={(v) =>
@@ -1264,6 +1484,21 @@ export function SitesEditor() {
 													setEditingSite({ ...editingSite!, iconPadding: v })
 												}
 											/>
+										</div>
+										<div className="flex flex-col gap-1">
+											<Label>预览图</Label>
+											<PreviewImagePicker
+												value={editingSite?.previewImage ?? ""}
+												onChange={(v) =>
+													setEditingSite({
+														...editingSite!,
+														previewImage: v,
+													})
+												}
+											/>
+											<p className="text-xs text-default-500">
+												选择“预览图卡片”样式后会展示这张图；留空时使用图标占位。
+											</p>
 										</div>
 									</div>
 								</Modal.Body>

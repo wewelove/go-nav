@@ -13,8 +13,10 @@ import {
 	parseColor,
 	TextField,
 } from "@heroui/react";
+import type React from "react";
 import { useRef, useState } from "react";
 import { getIconImageSrc } from "@/lib/icon";
+import { uploadImageWithCompression } from "@/lib/client/image-upload";
 import { resolveConfiguredValue, toPx } from "../site-icon";
 
 const TRANSPARENT_BG_COLOR = "rgba(255, 255, 255, 0)";
@@ -63,27 +65,38 @@ export function IconPicker({
 		resolvedIconPadding ? Number.parseFloat(resolvedIconPadding) : undefined;
 	const pickerColor = parseSafeColor(bgColor);
 
-	const onFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
-		const f = e.target.files?.[0];
-		e.target.value = ""; // reset so same file can be reselected
-		if (!f) return;
+	const uploadFile = async (f: File) => {
 		setUploading(true);
 		setErr(null);
 		try {
-			const fd = new FormData();
-			fd.append("file", f);
-			const res = await fetch("/api/upload", { method: "POST", body: fd });
-			if (!res.ok) {
-				const d = (await res.json().catch(() => ({}))) as { error?: string };
-				throw new Error(d.error || `上传失败 (${res.status})`);
-			}
-			const d = (await res.json()) as { url: string };
-			onChange(d.url);
+			const url = await uploadImageWithCompression(f, {
+				maxEdge: 512,
+				quality: 0.82,
+			});
+			onChange(url);
 		} catch (e) {
 			setErr((e as Error).message);
 		} finally {
 			setUploading(false);
 		}
+	};
+
+	const onFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const f = e.target.files?.[0];
+		e.target.value = ""; // reset so same file can be reselected
+		if (!f) return;
+		await uploadFile(f);
+	};
+
+	const onPasteImage = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+		const file = e.clipboardData.items
+			? Array.from(e.clipboardData.items)
+				.find((item) => item.kind === "file" && item.type.startsWith("image/"))
+				?.getAsFile()
+			: null;
+		if (!file) return;
+		e.preventDefault();
+		await uploadFile(file);
 	};
 
 	const preview = (() => {
@@ -109,7 +122,7 @@ export function IconPicker({
 				</div>
 				<TextField className="flex-1" value={value ?? ""} onChange={onChange}>
 					<Label className="sr-only">图标</Label>
-					<Input placeholder={placeholder} />
+					<Input placeholder={placeholder} onPaste={onPasteImage} />
 				</TextField>
 				<Button
 					type="button"

@@ -47,7 +47,10 @@ export const AppHeader = memo(function AppHeader({
 	onEngineDrawerOpen?: () => void;
 	showSearch?: boolean;
 	showEngineSelector?: boolean;
-	layout?: Pick<LayoutConfig, "defaultIconPadding" | "iconBorderRadius">;
+	layout?: Pick<
+		LayoutConfig,
+		"defaultIconPadding" | "iconBorderRadius" | "linkTarget" | "autoUseIntranet"
+	>;
 }) {
 	const logoSrc = getIconImageSrc(websiteLogo);
 	return (

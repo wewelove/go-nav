@@ -9,7 +9,7 @@ import {
     TextField,
 } from "@heroui/react";
 import { BiSun, BiMoon, BiDesktop } from "react-icons/bi";
-import type { LayoutConfig, ThemeMode, NavConfig } from "@/types";
+import type { CardStyle, LayoutConfig, ThemeMode, NavConfig } from "@/types";
 import { useAtom } from "jotai";
 import { navAtom } from "@/lib/store/admin";
 import { DEFAULT_LAYOUT } from "@/lib/store/site";
@@ -149,6 +149,10 @@ function ThemeEditor({
 	value: NavConfig;
 	onPatch: (p: Partial<NavConfig>) => void;
 }) {
+	const patchCardStyle = (cardStyle: CardStyle) => {
+		onPatch({ layout: { ...(value.layout ?? {}), cardStyle } });
+	};
+
 	return (
 		<div className="flex flex-col gap-4">
 			<div>
@@ -200,6 +204,69 @@ function ThemeEditor({
 							<span className="text-xs font-medium opacity-60">
 								{mode.desc}
 							</span>
+						</button>
+					);
+				})}
+			</div>
+
+			<Separator />
+
+			<div>
+				<h3 className="text-sm font-semibold text-gray-900 dark:text-neutral-100">
+					卡片样式
+				</h3>
+				<p className="mt-1 text-xs text-gray-500 dark:text-neutral-400">
+					常规样式保留当前紧凑卡片；预览图样式会展示网址的预览图，适合更视觉化的首页。
+				</p>
+			</div>
+			<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+				{(
+					[
+						{
+							key: "compact" as CardStyle,
+							label: "常规卡片",
+							desc: "紧凑、信息密度高",
+						},
+						{
+							key: "preview" as CardStyle,
+							label: "预览图卡片",
+							desc: "类似 Vercel 模板卡片",
+						},
+					] as const
+				).map((item) => {
+					const active = (value.layout?.cardStyle ?? "compact") === item.key;
+					return (
+						<button
+							key={item.key}
+							type="button"
+							onClick={() => patchCardStyle(item.key)}
+							className={`cursor-pointer rounded-2xl border p-4 text-left transition-all ${
+								active
+									? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/40 dark:text-blue-200"
+									: "border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:border-neutral-800 dark:hover:border-neutral-700 dark:hover:bg-neutral-900"
+							}`}
+						>
+							<div className="mb-4 flex h-28 items-center justify-center rounded-xl bg-white/80 p-3 shadow-inner dark:bg-neutral-950/60">
+								{item.key === "compact" ? (
+									<div className="flex w-full max-w-64 items-center gap-3 rounded-xl bg-white p-3 shadow-sm dark:bg-zinc-800">
+										<div className="size-10 rounded-full bg-blue-100 dark:bg-blue-950" />
+										<div className="min-w-0 flex-1">
+											<div className="h-3 w-24 rounded bg-zinc-900/80 dark:bg-zinc-100/80" />
+											<div className="mt-2 h-2 w-36 rounded bg-zinc-300 dark:bg-zinc-600" />
+										</div>
+									</div>
+								) : (
+									<div className="relative h-full w-full max-w-64 overflow-hidden rounded-xl border border-black/10 bg-white dark:border-white/10 dark:bg-zinc-900">
+										<div className="p-4">
+											<div className="h-3 w-28 rounded bg-zinc-900/80 dark:bg-zinc-100/80" />
+											<div className="mt-2 h-2 w-40 rounded bg-zinc-300 dark:bg-zinc-600" />
+										</div>
+										<div className="absolute bottom-[-18px] left-8 h-16 w-48 -rotate-6 rounded-lg border bg-gradient-to-br from-zinc-100 to-zinc-300 shadow-lg dark:border-white/10 dark:from-zinc-800 dark:to-zinc-950" />
+									</div>
+								)}
+							</div>
+							<div className="text-sm font-semibold">{item.label}</div>
+							<div className="mt-1 text-xs opacity-65">{item.desc}</div>
 						</button>
 					);
 				})}
@@ -410,6 +477,10 @@ function LayoutEditor({
 		{
 			label: "新标签页打开链接",
 			key: "linkTarget",
+		},
+		{
+			label: "自动访问内网（可达时优先）",
+			key: "autoUseIntranet",
 		},
 	];
 

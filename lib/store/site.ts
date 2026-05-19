@@ -25,10 +25,12 @@ export const DEFAULT_LAYOUT: Required<LayoutConfig> = {
 	showCategoryDescription: true,
 	cardMinWidth: "160px",
 	cardHeight: "64px",
+	cardStyle: "compact",
 	cardGridPadding: "8px",
 	iconBorderRadius: "full",
 	defaultIconPadding: "",
 	linkTarget: "new",
+	autoUseIntranet: false,
 };
 
 const EMPTY_WEBSITE: WebsiteData = { categories: [] };
@@ -96,6 +98,13 @@ export const flatSitesAtom = atom((get) => {
 	walk(get(siteWebsiteDataAtom).categories);
 	return result;
 });
+
+/** 是否存在至少一个配置了内网地址的网址 */
+export const hasIntranetSitesAtom = atom((get) =>
+	get(flatSitesAtom).some(
+		(site) => typeof site.intranetUrl === "string" && site.intranetUrl.trim().length > 0,
+	),
+);
 
 // 一些常用的细粒度派生，避免组件订阅整个 nav
 export const navNameAtom = atom((get) => get(siteNavAtom).name);

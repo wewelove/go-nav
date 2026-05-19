@@ -59,6 +59,9 @@ export const RecentVisits = memo(function RecentVisits({
 	const displayVisits = visits.slice(0, maxItems);
 	const totalItems = displayVisits.length;
 	const gapPx = parseCssSizeToPx(sectionGap);
+	const isPreviewStyle = layout?.cardStyle === "preview";
+	const effectiveCardMinWidth = cardMinWidth;
+	const effectiveCardHeight = isPreviewStyle ? `calc(${cardHeight} * 2)` : cardHeight;
 	const minCardWidthPx = parseCssSizeToPx(cardMinWidth);
 
 	useEffect(() => {
@@ -152,8 +155,8 @@ export const RecentVisits = memo(function RecentVisits({
 							ref={gridRef}
 							className="grid gap-3"
 							style={{
-								gridTemplateColumns: `repeat(auto-fill, minmax(${cardMinWidth}, 1fr))`,
-								gridAutoRows: cardHeight,
+								gridTemplateColumns: `repeat(auto-fill, minmax(${effectiveCardMinWidth}, 1fr))`,
+								gridAutoRows: effectiveCardHeight,
 							}}
 						>
 							{visibleVisits.map((v) => (

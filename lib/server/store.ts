@@ -91,6 +91,7 @@ export const DEFAULT_NAV: NavConfig = {
 		showFloatingActions: true,
 		defaultIconPadding: "8",
 		linkTarget: "new",
+		autoUseIntranet: false,
 	},
 	adsAspectRatio: "4/3",
 };

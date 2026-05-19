@@ -14,6 +14,7 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { LayoutConfig, NavSite, SearchEngine } from "@/types";
 import { recordVisit } from "@/hooks/use-recent-visits";
+import { openSiteWithPreference } from "@/lib/client/site-link";
 import { getIconImageSrc } from "@/lib/icon";
 import { SiteIcon } from "./site-icon";
 import fetchJsonp from "fetch-jsonp";
@@ -54,7 +55,10 @@ export function SearchBar({
 	engineId?: Key | null;
 	onEngineChange?: (id: Key | null) => void;
 	showEngineSelector?: boolean;
-	layout?: Pick<LayoutConfig, "defaultIconPadding" | "iconBorderRadius" | "linkTarget">;
+	layout?: Pick<
+		LayoutConfig,
+		"defaultIconPadding" | "iconBorderRadius" | "linkTarget" | "autoUseIntranet"
+	>;
 }) {
 	const engineOptions = useMemo(() => {
 		const base: SearchEngine[] = [];
@@ -344,11 +348,10 @@ export function SearchBar({
 	const openLocalResult = (r: (typeof results)[number]) => {
 		onNavigate?.(r.categoryId);
 		recordVisit(r);
-		if (layout?.linkTarget === "current") {
-			window.location.href = r.url;
-		} else {
-			window.open(r.url, "_blank", "noopener,noreferrer");
-		}
+		void openSiteWithPreference(r, {
+			linkTarget: layout?.linkTarget,
+			autoUseIntranet: layout?.autoUseIntranet,
+		});
 		setIsOpen(false);
 	};
 

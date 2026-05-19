@@ -52,9 +52,14 @@ export function isTransparentColor(value: string | undefined): boolean {
 	return false;
 }
 
-export function resolveSiteBackgroundColor(bgColor: string | undefined): string {
+export function resolveSiteBackgroundColor(
+	bgColor: string | undefined,
+	showDefaultBackgroundColor?: boolean,
+): string {
 	return isTransparentColor(bgColor)
-		? "var(--surface-secondary)"
+		? showDefaultBackgroundColor
+			? "var(--surface-secondary)"
+			: "transparent"
 		: bgColor!.trim();
 }
 
@@ -70,10 +75,12 @@ export function resolveSiteIconStyle({
 	site,
 	layout,
 	size,
+	showDefaultBackgroundColor,
 }: {
 	site: Pick<NavSite, "bgColor" | "iconPadding">;
 	layout?: IconLayout;
 	size: number;
+	showDefaultBackgroundColor?: boolean;
 }): CSSProperties {
 	const scale = size / BASE_ICON_SIZE;
 	const iconPadding = resolveConfiguredValue(
@@ -84,7 +91,10 @@ export function resolveSiteIconStyle({
 	return {
 		width: size,
 		height: size,
-		backgroundColor: resolveSiteBackgroundColor(site.bgColor),
+		backgroundColor: resolveSiteBackgroundColor(
+			site.bgColor,
+			showDefaultBackgroundColor,
+		),
 		padding: scalePx(iconPadding, scale) || undefined,
 		borderRadius:
 			layout?.iconBorderRadius !== "full" && layout?.iconBorderRadius
@@ -102,6 +112,7 @@ export function SiteIcon({
 	textClassName = "",
 	initialClassName = "",
 	loading = "lazy",
+	showDefaultBackgroundColor = true,
 }: {
 	site: Pick<NavSite, "title" | "icon" | "bgColor" | "iconPadding">;
 	layout?: IconLayout;
@@ -111,9 +122,15 @@ export function SiteIcon({
 	textClassName?: string;
 	initialClassName?: string;
 	loading?: "eager" | "lazy";
+	showDefaultBackgroundColor?: boolean;
 }) {
 	const iconSrc = getIconImageSrc(site.icon);
-	const style = resolveSiteIconStyle({ site, layout, size });
+	const style = resolveSiteIconStyle({
+		site,
+		layout,
+		size,
+		showDefaultBackgroundColor,
+	});
 
 	return (
 		<span

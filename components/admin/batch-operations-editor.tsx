@@ -32,7 +32,7 @@ import { resolveSiteBackgroundColor, toPx } from "@/components/site-icon";
 
 type BatchStatus = "idle" | "running" | "pausing" | "paused" | "finished";
 type RowStatus = "pending" | "running" | "success" | "failure";
-type BatchUpdateField = "title" | "description" | "icon";
+type BatchUpdateField = "title" | "description" | "icon" | "previewImage";
 
 interface BatchStats {
 	processed: number;
@@ -50,14 +50,19 @@ interface BatchSiteRow {
 	url: string;
 	description?: string;
 	icon?: string;
+	previewImage?: string;
 	bgColor?: string;
 	iconPadding?: string;
 	hasDescription: boolean;
 	hasIcon: boolean;
+	hasPreviewImage: boolean;
 }
 
 type SitePatch = Partial<
-	Pick<NavSite, "title" | "description" | "icon" | "bgColor" | "iconPadding">
+	Pick<
+		NavSite,
+		"title" | "description" | "icon" | "previewImage" | "bgColor" | "iconPadding"
+	>
 >;
 
 const UPDATE_FIELD_OPTIONS: Array<{
@@ -67,6 +72,7 @@ const UPDATE_FIELD_OPTIONS: Array<{
 	{ value: "title", label: "名称" },
 	{ value: "description", label: "描述" },
 	{ value: "icon", label: "图标" },
+	{ value: "previewImage", label: "预览图" },
 ];
 
 const DEFAULT_UPDATE_FIELDS = UPDATE_FIELD_OPTIONS.map(
@@ -77,6 +83,7 @@ const TABLE_COLUMN_WIDTHS = {
 	icon: 60,
 	title: 140,
 	description: 240,
+	previewImage: 112,
 	url: 240,
 	category: 160,
 	fields: 180,
@@ -87,10 +94,6 @@ const TABLE_COLUMN_WIDTHS = {
 const TABLE_MIN_WIDTH = Object.values(TABLE_COLUMN_WIDTHS).reduce(
 	(total, width) => total + width,
 	0,
-);
-
-const TABLE_COLUMN_WIDTH_MAP = new Map<string, number>(
-	Object.entries(TABLE_COLUMN_WIDTHS),
 );
 
 function normalizeUpdateFields(values: string[]) {
@@ -129,10 +132,12 @@ function collectSiteRows(categories: NavCategory[]) {
 					url: site.url,
 					description: site.description,
 					icon: site.icon,
+					previewImage: site.previewImage,
 					bgColor: site.bgColor,
 					iconPadding: site.iconPadding,
 					hasDescription: Boolean(site.description?.trim()),
 					hasIcon: Boolean(site.icon?.trim()),
+					hasPreviewImage: Boolean(site.previewImage?.trim()),
 				});
 			}
 			if (category.children?.length) {
@@ -177,33 +182,48 @@ function patchSiteInCategories(
 async function fetchWebsitePatch(
 	url: string,
 	updateFields: BatchUpdateField[],
+	signal?: AbortSignal,
 ) {
 	if (!url.trim()) {
 		throw new Error("缺少网站地址");
 	}
 
-	const res = await fetch("/api/fetch-website", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ url }),
-	});
-	if (!res.ok) {
-		const data = (await res.json().catch(() => ({}))) as { error?: string };
-		throw new Error(data.error || "获取失败");
+	const needsSiteMeta = updateFields.some(
+		(field) => field === "title" || field === "description" || field === "icon",
+	);
+	let data:
+		| {
+			title?: string;
+			faviconUrl?: string | null;
+			description?: string;
+		}
+		| undefined;
+	if (needsSiteMeta) {
+		const res = await fetch("/api/fetch-website", {
+			method: "POST",
+			signal,
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ url }),
+		});
+		if (!res.ok) {
+			const err = (await res.json().catch(() => ({}))) as { error?: string };
+			throw new Error(err.error || "获取失败");
+		}
+		data = (await res.json()) as {
+			title?: string;
+			faviconUrl?: string | null;
+			description?: string;
+		};
 	}
 
-	const data = (await res.json()) as {
-		title?: string;
-		faviconUrl?: string | null;
-		description?: string;
-	};
 	const patch: SitePatch = {};
 	const fields: string[] = [];
-	const title = data.title?.trim();
-	const description = data.description?.trim();
+	const title = data?.title?.trim();
+	const description = data?.description?.trim();
 	const shouldUpdateTitle = updateFields.includes("title");
 	const shouldUpdateDescription = updateFields.includes("description");
 	const shouldUpdateIcon = updateFields.includes("icon");
+	const shouldUpdatePreviewImage = updateFields.includes("previewImage");
 
 	if (shouldUpdateTitle && title) {
 		patch.title = title;
@@ -213,12 +233,13 @@ async function fetchWebsitePatch(
 		patch.description = description;
 		fields.push("描述");
 	}
-	if (shouldUpdateIcon && data.faviconUrl) {
+	if (shouldUpdateIcon && data?.faviconUrl) {
 		try {
 			const uploadRes = await fetch("/api/tools/uploadFavicon", {
 				method: "POST",
+				signal,
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ faviconUrl: data.faviconUrl }),
+				body: JSON.stringify({ faviconUrl: data?.faviconUrl }),
 			});
 			if (uploadRes.ok) {
 				const uploadData = (await uploadRes.json()) as { url?: string };
@@ -231,12 +252,38 @@ async function fetchWebsitePatch(
 			// 图标下载失败时仍保留名称、描述等已获取信息。
 		}
 	}
+	if (shouldUpdatePreviewImage) {
+		try {
+			const previewRes = await fetch("/api/tools/capturePreview", {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url }),
+			});
+			if (previewRes.ok) {
+				const previewData = (await previewRes.json()) as { url?: string };
+				if (previewData.url) {
+					patch.previewImage = previewData.url;
+					fields.push("预览图");
+				}
+			}
+		} catch {
+			// 预览图抓取失败时仍保留其它已更新字段。
+		}
+	}
 
 	if (fields.length === 0) {
 		throw new Error("未获取到选中字段的可更新信息");
 	}
 
 	return { patch, fields };
+}
+
+function isAbortError(error: unknown) {
+	return (
+		(error instanceof DOMException && error.name === "AbortError") ||
+		(error instanceof Error && error.name === "AbortError")
+	);
 }
 
 export function BatchOperationsEditor() {
@@ -268,6 +315,7 @@ export function BatchOperationsEditor() {
 	const statsRef = useRef<BatchStats>(EMPTY_STATS);
 	const pauseRequestedRef = useRef(false);
 	const runningRef = useRef(false);
+	const requestAbortRef = useRef<AbortController | null>(null);
 	const sourceSignatureRef = useRef(allRowsSignature);
 	const selectedUpdateFields = useMemo(
 		() => normalizeUpdateFields(selectedFields),
@@ -346,10 +394,12 @@ export function BatchOperationsEditor() {
 				title: patch.title ?? item.title,
 				description: patch.description ?? item.description,
 				icon: patch.icon ?? item.icon,
+				previewImage: patch.previewImage ?? item.previewImage,
 				bgColor: patch.bgColor ?? item.bgColor,
 				iconPadding: patch.iconPadding ?? item.iconPadding,
 				hasDescription: item.hasDescription || Boolean(patch.description),
 				hasIcon: item.hasIcon || Boolean(patch.icon),
+				hasPreviewImage: item.hasPreviewImage || Boolean(patch.previewImage),
 			};
 		});
 		queueRowsRef.current = nextQueue;
@@ -424,11 +474,14 @@ export function BatchOperationsEditor() {
 
 				setActiveRow(row);
 				setRowStatus(row.statusKey, "running");
+				const requestAbort = new AbortController();
+				requestAbortRef.current = requestAbort;
 
 				try {
 					const { patch } = await fetchWebsitePatch(
 						row.url,
 						selectedUpdateFields,
+						requestAbort.signal,
 					);
 					const patched = applyPatch(row, patch);
 					if (!patched) {
@@ -442,6 +495,11 @@ export function BatchOperationsEditor() {
 					setRowError(row.statusKey, null);
 					setRowStatus(row.statusKey, "success");
 				} catch (e) {
+					if (pauseRequestedRef.current && isAbortError(e)) {
+						setRowError(row.statusKey, null);
+						setRowStatus(row.statusKey, "pending");
+						break;
+					}
 					const message = e instanceof Error ? e.message : "获取失败";
 					statsRef.current = {
 						processed: statsRef.current.processed + 1,
@@ -450,6 +508,10 @@ export function BatchOperationsEditor() {
 					};
 					setRowError(row.statusKey, message);
 					setRowStatus(row.statusKey, "failure");
+				} finally {
+					if (requestAbortRef.current === requestAbort) {
+						requestAbortRef.current = null;
+					}
 				}
 				setStats(statsRef.current);
 			}
@@ -477,6 +539,8 @@ export function BatchOperationsEditor() {
 	const pauseBatch = () => {
 		if (!runningRef.current) return;
 		pauseRequestedRef.current = true;
+		requestAbortRef.current?.abort();
+		requestAbortRef.current = null;
 		setStatus("pausing");
 	};
 
@@ -517,7 +581,6 @@ export function BatchOperationsEditor() {
 				{activeRow ? (
 					<>
 						<Spinner size="sm" />
-						<BiGlobe className="size-4 shrink-0 text-default-500" />
 						<span className="shrink-0 font-medium">正在更新</span>
 						<span className="min-w-0 truncate font-medium">
 							{activeRow.title || activeRow.url}
@@ -539,7 +602,7 @@ export function BatchOperationsEditor() {
 								width: "calc(100% - 24px)",
 							}}
 						>
-							待开始更新，在更新前，请在下方筛选您要更新的信息范围：名称、描述、图标！
+							待开始更新，在更新前，请在下方筛选您要更新的信息范围：名称、描述、图标、预览图！
 						</span>
 					</>
 				)}
@@ -736,6 +799,12 @@ export function BatchOperationsEditor() {
 									>
 										描述
 									</Table.Column>
+									<Table.Column
+										id="previewImage"
+										width={TABLE_COLUMN_WIDTHS.previewImage}
+									>
+										预览图
+									</Table.Column>
 									<Table.Column id="url" minWidth={TABLE_COLUMN_WIDTHS.url}>
 										URL
 									</Table.Column>
@@ -819,6 +888,18 @@ export function BatchOperationsEditor() {
 													</div>
 												</Table.Cell>
 												<Table.Cell className={"flex items-center"}>
+													{row.previewImage ? (
+														// eslint-disable-next-line @next/next/no-img-element
+														<img
+															src={row.previewImage}
+															alt={row.title}
+															className="h-7 w-12 rounded border border-default object-cover"
+														/>
+													) : (
+														<span className="text-xs text-default-400">-</span>
+													)}
+												</Table.Cell>
+												<Table.Cell className={"flex items-center"}>
 													<div className="max-w-80 truncate text-xs text-default-500">
 														{row.url}
 													</div>
@@ -835,6 +916,9 @@ export function BatchOperationsEditor() {
 															描述
 														</InfoChip>
 														<InfoChip active={row.hasIcon}>图标</InfoChip>
+														<InfoChip active={row.hasPreviewImage}>
+															预览图
+														</InfoChip>
 													</div>
 												</Table.Cell>
 												<Table.Cell className={"flex items-center"}>

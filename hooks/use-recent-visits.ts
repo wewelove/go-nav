@@ -9,8 +9,10 @@ const MAX_ITEMS = 50;
 
 export interface RecentVisit {
 	url: string;
+	intranetUrl?: string;
 	title: string;
 	icon?: string;
+	previewImage?: string;
 	description?: string;
 	bgColor?: string;
 	iconPadding?: string;
@@ -59,8 +61,10 @@ export function recordVisit(site: NavSite) {
 	const filtered = visits.filter((v) => `${v.url}::${v.title}` !== key);
 	const entry: RecentVisit = {
 		url: site.url,
+		intranetUrl: site.intranetUrl,
 		title: site.title,
 		icon: site.icon,
+		previewImage: site.previewImage,
 		description: site.description,
 		bgColor: site.bgColor,
 		iconPadding: site.iconPadding,

@@ -7,6 +7,13 @@
 export type ThemeMode = "light" | "dark" | "system";
 
 /**
+ * 网站卡片展示样式
+ * - "compact": 当前常规紧凑样式
+ * - "preview": 带预览图的大卡片样式
+ */
+export type CardStyle = "compact" | "preview";
+
+/**
  * 布局与显示配置
  */
 export interface LayoutConfig {
@@ -40,6 +47,8 @@ export interface LayoutConfig {
 	cardMinWidth?: string;
 	/** 网站卡片高度，如 "64px"、"72px" */
 	cardHeight?: string;
+	/** 网站卡片展示样式："compact" 常规样式，"preview" 预览图样式 */
+	cardStyle?: CardStyle;
 	/** 卡片网格左右内边距，如 "8px"、"12px" */
 	cardGridPadding?: string;
 	/** 网站卡片图标圆角，如 "full"、"12px"、"8px" */
@@ -48,6 +57,8 @@ export interface LayoutConfig {
 	defaultIconPadding?: string;
 	/** 链接打开方式："current" 当前页打开，"new" 新标签页打开 */
 	linkTarget?: "current" | "new";
+	/** 是否自动优先访问内网地址（可达时优先） */
+	autoUseIntranet?: boolean;
 }
 
 /**
@@ -91,8 +102,12 @@ export interface NavSite {
 	description: string;
 	/** 网站跳转 URL */
 	url: string;
+	/** 网站内网地址（可选） */
+	intranetUrl?: string;
 	/** 网站图标 URL (可为本地/远程，支持 emoji 开头) */
 	icon?: string;
+	/** 网站预览图 URL（用于预览图卡片样式） */
+	previewImage?: string;
 	/** 图标背景颜色 (hex 格式，如 #FF5733) */
 	bgColor?: string;
 	/** 图标区域内边距，如 "2px"、"4px" */
