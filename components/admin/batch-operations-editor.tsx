@@ -416,7 +416,8 @@ export function BatchOperationsEditor() {
 
 			for (const row of queueRowsRef.current) {
 				if (pauseRequestedRef.current) break;
-				const currentRowStatus = rowStatusRef.current[row.statusKey] ?? "pending";
+				const currentRowStatus =
+					rowStatusRef.current[row.statusKey] ?? "pending";
 				if (currentRowStatus === "success" || currentRowStatus === "failure") {
 					continue;
 				}
@@ -464,7 +465,13 @@ export function BatchOperationsEditor() {
 			setStatus("finished");
 			toast.success("批量更新完成，记得点击保存");
 		},
-		[applyPatch, resetProgress, selectedUpdateFields, setRowError, setRowStatus],
+		[
+			applyPatch,
+			resetProgress,
+			selectedUpdateFields,
+			setRowError,
+			setRowStatus,
+		],
 	);
 
 	const pauseBatch = () => {
@@ -478,16 +485,7 @@ export function BatchOperationsEditor() {
 	const isRunning = status === "running" || status === "pausing";
 	const canEditQueue = status === "idle" || status === "paused";
 	const progressValue = total > 0 ? stats.processed : 0;
-	const statusText =
-		status === "running"
-			? "更新中"
-			: status === "pausing"
-				? "暂停中"
-				: status === "paused"
-					? "已暂停"
-					: status === "finished"
-						? "已完成"
-						: "未开始";
+
 	const filteredRows = useMemo(() => {
 		const q = search.trim().toLowerCase();
 		if (!q) return queueRows;
@@ -554,9 +552,6 @@ export function BatchOperationsEditor() {
 						</Chip>
 						<Chip size="sm" variant="secondary" className="h-7 px-2.5 text-xs!">
 							已移除 {removedCount}
-						</Chip>
-						<Chip size="sm" variant="secondary" className="h-7 px-2.5 text-xs!">
-							状态 {statusText}
 						</Chip>
 						<Chip size="sm" variant="secondary" className="h-7 px-2.5 text-xs!">
 							已获取 {stats.processed}
@@ -777,10 +772,10 @@ export function BatchOperationsEditor() {
 									)}
 								>
 									{(row) => {
-											const rowStatus = rowStatusMap[row.statusKey] ?? "pending";
-											const rowError = rowErrorMap[row.statusKey];
-											const canRemove =
-												canEditQueue && rowStatus === "pending" && !isRunning;
+										const rowStatus = rowStatusMap[row.statusKey] ?? "pending";
+										const rowError = rowErrorMap[row.statusKey];
+										const canRemove =
+											canEditQueue && rowStatus === "pending" && !isRunning;
 										return (
 											<Table.Row id={row.key} textValue={row.title || row.url}>
 												<Table.Cell className={"flex items-center"}>

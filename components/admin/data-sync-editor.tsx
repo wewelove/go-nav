@@ -246,7 +246,11 @@ export function DataSyncEditor() {
 								: `${actionLabel(action)}失败 (${res.status})`,
 					);
 				}
-				toast.success(`${providerLabel(provider)} ${actionLabel(action)}成功`);
+				const successMessage =
+					"message" in data && data.message
+						? data.message
+						: `${providerLabel(provider)} ${actionLabel(action)}成功`;
+				toast.success(successMessage);
 				if (action === "pull") {
 					setTimeout(() => window.location.reload(), 900);
 				}

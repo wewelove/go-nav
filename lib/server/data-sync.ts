@@ -122,6 +122,24 @@ interface GitHubCreateCommitResponse {
 	sha: string;
 }
 
+interface GitHubCommitResponse {
+	tree?: {
+		sha?: string;
+	};
+}
+
+interface GitHubPushBase {
+	parentCommitSha?: string;
+	parentTreeSha?: string;
+	sourceBranch?: string;
+	createRef: boolean;
+}
+
+interface GitHubPushResult {
+	remote: string;
+	changed: boolean;
+}
+
 interface SyncUploadFile {
 	name: string;
 	data: Buffer;
@@ -364,14 +382,14 @@ export async function runDataSync(
 	try {
 		if (provider === "github") {
 			if (action === "push") {
-				const remote = await pushToGitHub(config.github);
+				const pushed = await pushToGitHub(config.github);
 				result = {
 					ok: true,
 					provider,
 					action,
 					at,
-					remote,
-					message: "推送成功",
+					remote: pushed.remote,
+					message: pushed.changed ? "推送成功" : "数据没有变化，无需推送",
 				};
 			} else {
 				const restored = await pullFromGitHub(config.github);
@@ -577,98 +595,64 @@ async function createGitHubRef(
 	});
 }
 
-async function bootstrapGitHubEmptyRepo(
+async function updateGitHubRef(
 	parts: GitHubRepoParts,
-	config: GitHubSyncConfig,
-	initialFilePath: string,
-	initialContent: Buffer,
+	ref: string,
+	sha: string,
+	token: string,
 ) {
-	const apiBase = `https://api.github.com/repos/${parts.owner}/${parts.repo}`;
-	const blob = await githubFetch<GitHubCreateBlobResponse>(
-		`${apiBase}/git/blobs`,
-		config.token,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				content: initialContent.toString("base64"),
-				encoding: "base64",
-			}),
-		},
-	);
-
-	const tree = await githubFetch<GitHubCreateTreeResponse>(
-		`${apiBase}/git/trees`,
-		config.token,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				tree: [
-					{
-						path: initialFilePath,
-						mode: "100644",
-						type: "blob",
-						sha: blob.sha,
-					},
-				],
-			}),
-		},
-	);
-
-	const commit = await githubFetch<GitHubCreateCommitResponse>(
-		`${apiBase}/git/commits`,
-		config.token,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				message: config.commitMessage || "chore: backup Go Nav data",
-				tree: tree.sha,
-				parents: [],
-			}),
-		},
-	);
-
-	await createGitHubRef(parts, `heads/${config.branch}`, commit.sha, config.token);
+	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/git/refs/${encodeGitHubPath(ref)}`;
+	await githubFetch<unknown>(url, token, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			sha,
+			force: false,
+		}),
+	});
 }
 
-async function ensureGitHubBranchForPush(
+async function getGitHubCommit(
+	parts: GitHubRepoParts,
+	commitSha: string,
+	token: string,
+): Promise<GitHubCommitResponse> {
+	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/git/commits/${commitSha}`;
+	return await githubFetch<GitHubCommitResponse>(url, token);
+}
+
+async function resolveGitHubPushBase(
 	parts: GitHubRepoParts,
 	config: GitHubSyncConfig,
-	initialFilePath: string,
-	initialContent: Buffer,
-) {
-	const targetRef = await getGitHubRef(
-		parts,
-		`heads/${config.branch}`,
-		config.token,
-	);
-	if (targetRef?.object?.sha) return;
-
+): Promise<GitHubPushBase> {
+	const targetRef = await getGitHubRef(parts, `heads/${config.branch}`, config.token);
+	if (targetRef?.object?.sha) {
+		const commit = await getGitHubCommit(parts, targetRef.object.sha, config.token);
+		return {
+			parentCommitSha: targetRef.object.sha,
+			parentTreeSha: commit.tree?.sha,
+			sourceBranch: config.branch,
+			createRef: false,
+		};
+	}
 	const repoInfo = await githubFetch<GitHubRepoResponse>(
 		`https://api.github.com/repos/${parts.owner}/${parts.repo}`,
 		config.token,
 	);
 	const defaultBranch = (repoInfo.default_branch || "").trim();
 	if (defaultBranch) {
-		const defaultRef = await getGitHubRef(
-			parts,
-			`heads/${defaultBranch}`,
-			config.token,
-		);
+		const defaultRef = await getGitHubRef(parts, `heads/${defaultBranch}`, config.token);
 		if (defaultRef?.object?.sha) {
-			await createGitHubRef(
-				parts,
-				`heads/${config.branch}`,
-				defaultRef.object.sha,
-				config.token,
-			);
-			return;
+			const commit = await getGitHubCommit(parts, defaultRef.object.sha, config.token);
+			return {
+				parentCommitSha: defaultRef.object.sha,
+				parentTreeSha: commit.tree?.sha,
+				sourceBranch: defaultBranch,
+				createRef: true,
+			};
 		}
 	}
-
-	await bootstrapGitHubEmptyRepo(parts, config, initialFilePath, initialContent);
+	return { createRef: true };
 }
 
 async function readGitHubFileBuffer(
@@ -730,47 +714,113 @@ async function listGitHubDirectoryRecursive(
 	return files;
 }
 
-async function upsertGitHubFile(
-	parts: GitHubRepoParts,
-	config: GitHubSyncConfig,
-	filePath: string,
-	content: Buffer,
-): Promise<void> {
-	const existing = await getGitHubPathContent(
-		parts,
-		filePath,
-		config.branch,
-		config.token,
-	);
-	const sha = !existing || Array.isArray(existing) ? undefined : existing.sha;
-	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/contents/${encodeGitHubPath(filePath)}`;
-	await githubFetch<unknown>(url, config.token, {
-		method: "PUT",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			message: config.commitMessage || "chore: backup Go Nav data",
-			content: content.toString("base64"),
-			branch: config.branch,
-			...(sha ? { sha } : {}),
-		}),
-	});
-}
-
-async function pushToGitHub(config: GitHubSyncConfig): Promise<string> {
+async function pushToGitHub(config: GitHubSyncConfig): Promise<GitHubPushResult> {
 	const parts = validateGitHubConfig(config);
-	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.github.filePath);
+	const baseDir = normalizeRemotePath(
+		config.filePath,
+		DEFAULT_SYNC_CONFIG.github.filePath,
+	);
 	const files = collectGitHubSyncFiles(baseDir);
-	const initial = files.find((f) => f.path.endsWith("/website.json")) || files[0];
-	if (!initial) {
+	if (files.length === 0) {
 		throw new Error("没有可同步到 GitHub 的数据文件");
 	}
 
-	await ensureGitHubBranchForPush(parts, config, initial.path, initial.data);
-	for (const file of files) {
-		await upsertGitHubFile(parts, config, file.path, file.data);
+	const pushBase = await resolveGitHubPushBase(parts, config);
+	if (pushBase.parentCommitSha && !pushBase.parentTreeSha) {
+		throw new Error("无法获取 GitHub 基线树信息，请稍后重试");
 	}
 
-	return `github:${parts.owner}/${parts.repo}@${config.branch}:${baseDir}/(website.json,nav.json,uploads/*)`;
+	const desiredPaths = new Set(files.map((file) => file.path));
+	let stalePaths: string[] = [];
+	if (pushBase.sourceBranch) {
+		const existingFiles = await listGitHubDirectoryRecursive(
+			parts,
+			baseDir,
+			pushBase.sourceBranch,
+			config.token,
+		).catch(() => []);
+		stalePaths = existingFiles
+			.map((entry) => entry.path || "")
+			.filter((p) => p && !desiredPaths.has(p));
+	}
+
+	const apiBase = `https://api.github.com/repos/${parts.owner}/${parts.repo}`;
+	const tree: Array<{
+		path: string;
+		mode: "100644";
+		type: "blob";
+		sha: string | null;
+	}> = [];
+
+	for (const file of files) {
+		const blob = await githubFetch<GitHubCreateBlobResponse>(
+			`${apiBase}/git/blobs`,
+			config.token,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: file.data.toString("base64"),
+					encoding: "base64",
+				}),
+			},
+		);
+		tree.push({
+			path: file.path,
+			mode: "100644",
+			type: "blob",
+			sha: blob.sha,
+		});
+	}
+
+	for (const stalePath of stalePaths) {
+		tree.push({
+			path: stalePath,
+			mode: "100644",
+			type: "blob",
+			sha: null,
+		});
+	}
+
+	const newTree = await githubFetch<GitHubCreateTreeResponse>(
+		`${apiBase}/git/trees`,
+		config.token,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				tree,
+				...(pushBase.parentTreeSha ? { base_tree: pushBase.parentTreeSha } : {}),
+			}),
+		},
+	);
+
+	const remote = `github:${parts.owner}/${parts.repo}@${config.branch}:${baseDir}/(website.json,nav.json,uploads/*)`;
+	if (pushBase.parentTreeSha && newTree.sha === pushBase.parentTreeSha) {
+		return { remote, changed: false };
+	}
+
+	const commit = await githubFetch<GitHubCreateCommitResponse>(
+		`${apiBase}/git/commits`,
+		config.token,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				message: config.commitMessage || "chore: backup Go Nav data",
+				tree: newTree.sha,
+				parents: pushBase.parentCommitSha ? [pushBase.parentCommitSha] : [],
+			}),
+		},
+	);
+
+	if (pushBase.createRef) {
+		await createGitHubRef(parts, `heads/${config.branch}`, commit.sha, config.token);
+	} else {
+		await updateGitHubRef(parts, `heads/${config.branch}`, commit.sha, config.token);
+	}
+
+	return { remote, changed: true };
 }
 
 async function pullFromGitHub(
