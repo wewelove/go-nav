@@ -1,15 +1,30 @@
 import fs from "node:fs";
-import { SYNC_FILE } from "@/lib/server/paths";
-import { readJsonOr, writeJsonAtomic } from "@/lib/server/store";
+import path from "node:path";
+import { SYNC_FILE, UPLOADS_DIR } from "@/lib/server/paths";
+import { readJsonOr, readNav, readWebsiteData, writeJsonAtomic, writeNav, writeWebsiteData } from "@/lib/server/store";
 import {
 	createDataBackupZip,
 	MAX_BACKUP_SIZE,
 	restoreDataBackupZip,
 	type BackupRestoreResult,
 } from "@/lib/server/backup";
+import type { NavConfig, WebsiteData } from "@/types";
 
 export type SyncProvider = "github" | "webdav";
 export type SyncAction = "push" | "pull";
+
+const WEBDAV_BACKUP_FILE_PREFIX = "go-nav-data";
+const WEBDAV_BACKUP_FILE_SUFFIX = ".zip";
+
+const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".svg",
+	".ico",
+]);
 
 export interface GitHubSyncConfig {
 	repo: string;
@@ -24,6 +39,14 @@ export interface WebDavSyncConfig {
 	filePath: string;
 	username: string;
 	password: string;
+}
+
+export interface WebDavBackupEntry {
+	name: string;
+	path: string;
+	size?: number;
+	createdAt?: string;
+	modifiedAt?: string;
 }
 
 export interface DataSyncRunResult {
@@ -52,21 +75,9 @@ export interface DataSyncConfigInput {
 	webdav?: Partial<WebDavSyncConfig>;
 }
 
-const DEFAULT_SYNC_CONFIG: DataSyncConfig = {
-	github: {
-		repo: "",
-		branch: "main",
-		filePath: "backups/go-nav-data.zip",
-		token: "",
-		commitMessage: "chore: backup Go Nav data",
-	},
-	webdav: {
-		url: "",
-		filePath: "go-nav/go-nav-data.zip",
-		username: "",
-		password: "",
-	},
-};
+export interface DataSyncRunOptions {
+	target?: string;
+}
 
 interface GitHubRepoParts {
 	owner: string;
@@ -75,6 +86,8 @@ interface GitHubRepoParts {
 
 interface GitHubContentResponse {
 	type?: string;
+	name?: string;
+	path?: string;
 	sha?: string;
 	content?: string;
 	encoding?: string;
@@ -108,6 +121,40 @@ interface GitHubCreateTreeResponse {
 interface GitHubCreateCommitResponse {
 	sha: string;
 }
+
+interface SyncUploadFile {
+	name: string;
+	data: Buffer;
+}
+
+interface SyncFileEntry {
+	path: string;
+	data: Buffer;
+}
+
+interface WebDavPropfindItem {
+	href: string;
+	isCollection: boolean;
+	size?: number;
+	createdAt?: string;
+	modifiedAt?: string;
+}
+
+const DEFAULT_SYNC_CONFIG: DataSyncConfig = {
+	github: {
+		repo: "",
+		branch: "main",
+		filePath: "data",
+		token: "",
+		commitMessage: "chore: backup Go Nav data",
+	},
+	webdav: {
+		url: "",
+		filePath: "backup/go-nav",
+		username: "",
+		password: "",
+	},
+};
 
 function cloneDefaultConfig(): DataSyncConfig {
 	return JSON.parse(JSON.stringify(DEFAULT_SYNC_CONFIG)) as DataSyncConfig;
@@ -155,6 +202,67 @@ function normalizeConfig(input: Partial<DataSyncConfig>): DataSyncConfig {
 			password: asString(webdav.password),
 		},
 	};
+}
+
+function normalizeWebDavTarget(target: string | undefined): string {
+	const trimmed = (target || "")
+		.trim()
+		.replace(/\\/g, "/")
+		.replace(/^\/+/, "")
+		.replace(/\/{2,}/g, "/");
+	if (!trimmed) return "";
+	const parts = trimmed.split("/");
+	if (parts.some((part) => !part || part === "." || part === "..")) return "";
+	return parts.join("/");
+}
+
+function safeUploadName(name: string): string | null {
+	const base = path.basename(name);
+	if (!base || base.startsWith(".")) return null;
+	if (base !== name) return null;
+	if (!ALLOWED_UPLOAD_EXTENSIONS.has(path.extname(base).toLowerCase())) return null;
+	return base;
+}
+
+function getUploadEntriesForSync(): SyncUploadFile[] {
+	if (!fs.existsSync(UPLOADS_DIR)) return [];
+	const uploads: SyncUploadFile[] = [];
+	for (const file of fs.readdirSync(UPLOADS_DIR)) {
+		const safe = safeUploadName(file);
+		if (!safe) continue;
+		const full = path.join(UPLOADS_DIR, safe);
+		try {
+			if (!fs.statSync(full).isFile()) continue;
+			uploads.push({ name: safe, data: fs.readFileSync(full) });
+		} catch {
+			// 单个文件读取失败不应阻塞整体同步。
+		}
+	}
+	return uploads;
+}
+
+function collectGitHubSyncFiles(baseDir: string): SyncFileEntry[] {
+	const websiteData = readWebsiteData();
+	const nav = readNav();
+	const files: SyncFileEntry[] = [
+		{
+			path: `${baseDir}/website.json`,
+			data: Buffer.from(JSON.stringify(websiteData, null, 2), "utf8"),
+		},
+		{
+			path: `${baseDir}/nav.json`,
+			data: Buffer.from(JSON.stringify(nav, null, 2), "utf8"),
+		},
+	];
+
+	for (const upload of getUploadEntriesForSync()) {
+		files.push({
+			path: `${baseDir}/uploads/${upload.name}`,
+			data: upload.data,
+		});
+	}
+
+	return files;
 }
 
 export function readDataSyncConfig(): DataSyncConfig {
@@ -217,24 +325,72 @@ export function saveDataSyncConfigFromInput(
 	return toPublicDataSyncConfig(next);
 }
 
+export async function listWebDavBackups(): Promise<WebDavBackupEntry[]> {
+	const config = readDataSyncConfig();
+	const entries = await listWebDavBackupFiles(config.webdav);
+	return entries
+		.filter((entry) => !entry.isCollection)
+		.map((entry) => ({
+			name: entry.name,
+			path: entry.path,
+			size: entry.size,
+			createdAt: entry.createdAt,
+			modifiedAt: entry.modifiedAt,
+		}))
+		.sort((a, b) => {
+			const at = Date.parse(a.createdAt || a.modifiedAt || "");
+			const bt = Date.parse(b.createdAt || b.modifiedAt || "");
+			if (Number.isFinite(at) && Number.isFinite(bt)) return bt - at;
+			if (Number.isFinite(at)) return -1;
+			if (Number.isFinite(bt)) return 1;
+			return b.name.localeCompare(a.name);
+		});
+}
+
+export async function deleteWebDavBackup(targetPathInput: string): Promise<void> {
+	const config = readDataSyncConfig();
+	await deleteWebDavBackupFile(config.webdav, targetPathInput);
+}
+
 export async function runDataSync(
 	provider: SyncProvider,
 	action: SyncAction,
+	options: DataSyncRunOptions = {},
 ): Promise<DataSyncRunResult> {
 	const config = readDataSyncConfig();
 	const at = new Date().toISOString();
 	let result: DataSyncRunResult;
 
 	try {
-		if (action === "push") {
+		if (provider === "github") {
+			if (action === "push") {
+				const remote = await pushToGitHub(config.github);
+				result = {
+					ok: true,
+					provider,
+					action,
+					at,
+					remote,
+					message: "推送成功",
+				};
+			} else {
+				const restored = await pullFromGitHub(config.github);
+				result = {
+					ok: true,
+					provider,
+					action,
+					at,
+					remote: restored.remote,
+					restored: restored.result,
+					message: "拉取并还原成功",
+				};
+			}
+		} else if (action === "push") {
 			const zip = createDataBackupZip();
 			if (zip.length > MAX_BACKUP_SIZE) {
 				throw new Error("备份文件过大，当前远端同步最大支持 20MB");
 			}
-			const remote =
-				provider === "github"
-					? await pushToGitHub(config.github, zip)
-					: await pushToWebDav(config.webdav, zip);
+			const remote = await pushToWebDav(config.webdav, zip);
 			result = {
 				ok: true,
 				provider,
@@ -245,10 +401,7 @@ export async function runDataSync(
 				message: "推送成功",
 			};
 		} else {
-			const { remote, zip } =
-				provider === "github"
-					? await pullFromGitHub(config.github)
-					: await pullFromWebDav(config.webdav);
+			const { remote, zip } = await pullFromWebDav(config.webdav, options.target);
 			if (zip.length > MAX_BACKUP_SIZE) {
 				throw new Error("远端备份文件过大，当前最大支持 20MB");
 			}
@@ -306,7 +459,7 @@ function validateGitHubConfig(config: GitHubSyncConfig): GitHubRepoParts {
 		throw new Error("请填写 GitHub 分支");
 	}
 	if (!config.filePath.trim()) {
-		throw new Error("请填写 GitHub 备份路径");
+		throw new Error("请填写 GitHub 备份目录");
 	}
 	if (!config.token.trim()) {
 		throw new Error("请填写 GitHub Token");
@@ -328,7 +481,7 @@ async function readGitHubError(res: Response): Promise<string> {
 			return `GitHub 资源不存在：请检查仓库名、分支名以及 Token 是否有该仓库访问权限（原始信息：${message}）`;
 		}
 		if (status === 422) {
-			return `GitHub 请求参数无效：请检查分支、文件路径与提交信息（原始信息：${message}）`;
+			return `GitHub 请求参数无效：请检查分支、路径与提交信息（原始信息：${message}）`;
 		}
 		if (status === 409 && message.includes("Git Repository is empty")) {
 			return "GitHub 仓库尚未初始化（空仓库）。请先在仓库中创建一个 README 或任意首个文件并提交一次，然后再执行同步推送。";
@@ -359,12 +512,12 @@ async function githubFetch<T>(
 	return (await res.json()) as T;
 }
 
-async function getGitHubContent(
+async function getGitHubPathContent(
 	parts: GitHubRepoParts,
 	filePath: string,
 	branch: string,
 	token: string,
-): Promise<GitHubContentResponse | null> {
+): Promise<GitHubContentResponse | GitHubContentResponse[] | null> {
 	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/contents/${encodeGitHubPath(filePath)}?ref=${encodeURIComponent(branch)}`;
 	const res = await fetch(url, {
 		headers: {
@@ -375,11 +528,7 @@ async function getGitHubContent(
 	});
 	if (res.status === 404) return null;
 	if (!res.ok) throw new Error(await readGitHubError(res));
-	const data = (await res.json()) as GitHubContentResponse;
-	if (data.type && data.type !== "file") {
-		throw new Error("GitHub 备份路径不是文件");
-	}
-	return data;
+	return (await res.json()) as GitHubContentResponse | GitHubContentResponse[];
 }
 
 function githubHeaders(token: string): Record<string, string> {
@@ -431,7 +580,8 @@ async function createGitHubRef(
 async function bootstrapGitHubEmptyRepo(
 	parts: GitHubRepoParts,
 	config: GitHubSyncConfig,
-	zip: Buffer,
+	initialFilePath: string,
+	initialContent: Buffer,
 ) {
 	const apiBase = `https://api.github.com/repos/${parts.owner}/${parts.repo}`;
 	const blob = await githubFetch<GitHubCreateBlobResponse>(
@@ -441,7 +591,7 @@ async function bootstrapGitHubEmptyRepo(
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				content: zip.toString("base64"),
+				content: initialContent.toString("base64"),
 				encoding: "base64",
 			}),
 		},
@@ -456,7 +606,7 @@ async function bootstrapGitHubEmptyRepo(
 			body: JSON.stringify({
 				tree: [
 					{
-						path: config.filePath,
+						path: initialFilePath,
 						mode: "100644",
 						type: "blob",
 						sha: blob.sha,
@@ -486,7 +636,8 @@ async function bootstrapGitHubEmptyRepo(
 async function ensureGitHubBranchForPush(
 	parts: GitHubRepoParts,
 	config: GitHubSyncConfig,
-	zip: Buffer,
+	initialFilePath: string,
+	initialContent: Buffer,
 ) {
 	const targetRef = await getGitHubRef(
 		parts,
@@ -517,63 +668,182 @@ async function ensureGitHubBranchForPush(
 		}
 	}
 
-	// 走到这里代表仓库无任何提交（空仓库），创建首个提交并建立目标分支。
-	await bootstrapGitHubEmptyRepo(parts, config, zip);
+	await bootstrapGitHubEmptyRepo(parts, config, initialFilePath, initialContent);
 }
 
-async function pushToGitHub(
+async function readGitHubFileBuffer(
+	parts: GitHubRepoParts,
+	filePath: string,
+	branch: string,
+	token: string,
+): Promise<Buffer> {
+	const content = await getGitHubPathContent(parts, filePath, branch, token);
+	if (!content || Array.isArray(content)) {
+		throw new Error(`GitHub 路径不是文件：${filePath}`);
+	}
+	if (content.content && content.encoding === "base64") {
+		return Buffer.from(content.content.replace(/\s/g, ""), "base64");
+	}
+	if (!content.sha) {
+		throw new Error(`GitHub 文件读取失败：${filePath}`);
+	}
+	const blobUrl = `https://api.github.com/repos/${parts.owner}/${parts.repo}/git/blobs/${content.sha}`;
+	const blob = await githubFetch<GitHubBlobResponse>(blobUrl, token);
+	if (!blob.content || blob.encoding !== "base64") {
+		throw new Error(`GitHub 文件不是 base64 blob：${filePath}`);
+	}
+	return Buffer.from(blob.content.replace(/\s/g, ""), "base64");
+}
+
+async function listGitHubDirectoryRecursive(
+	parts: GitHubRepoParts,
+	dirPath: string,
+	branch: string,
+	token: string,
+): Promise<GitHubContentResponse[]> {
+	const content = await getGitHubPathContent(parts, dirPath, branch, token);
+	if (!content) return [];
+	if (!Array.isArray(content)) {
+		if (content.type === "dir") {
+			return [];
+		}
+		throw new Error(`GitHub 目录路径无效：${dirPath}`);
+	}
+
+	const files: GitHubContentResponse[] = [];
+	for (const entry of content) {
+		if (entry.type === "file") {
+			files.push(entry);
+			continue;
+		}
+		if (entry.type === "dir" && entry.path) {
+			const children = await listGitHubDirectoryRecursive(
+				parts,
+				entry.path,
+				branch,
+				token,
+			);
+			files.push(...children);
+		}
+	}
+
+	return files;
+}
+
+async function upsertGitHubFile(
+	parts: GitHubRepoParts,
 	config: GitHubSyncConfig,
-	zip: Buffer,
-): Promise<string> {
-	const parts = validateGitHubConfig(config);
-	await ensureGitHubBranchForPush(parts, config, zip);
-	const existing = await getGitHubContent(
+	filePath: string,
+	content: Buffer,
+): Promise<void> {
+	const existing = await getGitHubPathContent(
 		parts,
-		config.filePath,
+		filePath,
 		config.branch,
 		config.token,
 	);
-	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/contents/${encodeGitHubPath(config.filePath)}`;
+	const sha = !existing || Array.isArray(existing) ? undefined : existing.sha;
+	const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/contents/${encodeGitHubPath(filePath)}`;
 	await githubFetch<unknown>(url, config.token, {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			message: config.commitMessage || "chore: backup Go Nav data",
-			content: zip.toString("base64"),
+			content: content.toString("base64"),
 			branch: config.branch,
-			...(existing?.sha ? { sha: existing.sha } : {}),
+			...(sha ? { sha } : {}),
 		}),
 	});
-	return `github:${parts.owner}/${parts.repo}@${config.branch}:${config.filePath}`;
+}
+
+async function pushToGitHub(config: GitHubSyncConfig): Promise<string> {
+	const parts = validateGitHubConfig(config);
+	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.github.filePath);
+	const files = collectGitHubSyncFiles(baseDir);
+	const initial = files.find((f) => f.path.endsWith("/website.json")) || files[0];
+	if (!initial) {
+		throw new Error("没有可同步到 GitHub 的数据文件");
+	}
+
+	await ensureGitHubBranchForPush(parts, config, initial.path, initial.data);
+	for (const file of files) {
+		await upsertGitHubFile(parts, config, file.path, file.data);
+	}
+
+	return `github:${parts.owner}/${parts.repo}@${config.branch}:${baseDir}/(website.json,nav.json,uploads/*)`;
 }
 
 async function pullFromGitHub(
 	config: GitHubSyncConfig,
-): Promise<{ remote: string; zip: Buffer }> {
+): Promise<{ remote: string; result: BackupRestoreResult }> {
 	const parts = validateGitHubConfig(config);
-	const content = await getGitHubContent(
+	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.github.filePath);
+	const websitePath = `${baseDir}/website.json`;
+	const navPath = `${baseDir}/nav.json`;
+	const uploadsDirPath = `${baseDir}/uploads`;
+
+	const websiteBuf = await readGitHubFileBuffer(
 		parts,
-		config.filePath,
+		websitePath,
 		config.branch,
 		config.token,
 	);
-	if (!content?.sha) {
-		throw new Error("GitHub 上未找到备份文件");
+	const navBuf = await readGitHubFileBuffer(
+		parts,
+		navPath,
+		config.branch,
+		config.token,
+	);
+
+	let websiteData: WebsiteData;
+	let navData: NavConfig;
+	try {
+		websiteData = JSON.parse(websiteBuf.toString("utf8")) as WebsiteData;
+	} catch {
+		throw new Error("GitHub 的 website.json 解析失败");
 	}
-	if (content.content && content.encoding === "base64") {
-		return {
-			remote: `github:${parts.owner}/${parts.repo}@${config.branch}:${config.filePath}`,
-			zip: Buffer.from(content.content.replace(/\s/g, ""), "base64"),
-		};
+	try {
+		navData = JSON.parse(navBuf.toString("utf8")) as NavConfig;
+	} catch {
+		throw new Error("GitHub 的 nav.json 解析失败");
 	}
-	const blobUrl = `https://api.github.com/repos/${parts.owner}/${parts.repo}/git/blobs/${content.sha}`;
-	const blob = await githubFetch<GitHubBlobResponse>(blobUrl, config.token);
-	if (!blob.content || blob.encoding !== "base64") {
-		throw new Error("GitHub 备份文件不是 base64 blob");
+
+	writeWebsiteData(websiteData);
+	writeNav(navData);
+
+	const uploadEntries = await listGitHubDirectoryRecursive(
+		parts,
+		uploadsDirPath,
+		config.branch,
+		config.token,
+	).catch(() => []);
+
+	let uploadsCount = 0;
+	if (uploadEntries.length > 0) {
+		fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+		for (const entry of uploadEntries) {
+			if (!entry.path) continue;
+			const name = entry.path.slice(uploadsDirPath.length + 1);
+			const safe = safeUploadName(name);
+			if (!safe) continue;
+			const buf = await readGitHubFileBuffer(
+				parts,
+				entry.path,
+				config.branch,
+				config.token,
+			);
+			fs.writeFileSync(path.join(UPLOADS_DIR, safe), buf);
+			uploadsCount += 1;
+		}
 	}
+
 	return {
-		remote: `github:${parts.owner}/${parts.repo}@${config.branch}:${config.filePath}`,
-		zip: Buffer.from(blob.content.replace(/\s/g, ""), "base64"),
+		remote: `github:${parts.owner}/${parts.repo}@${config.branch}:${baseDir}`,
+		result: {
+			website: true,
+			nav: true,
+			uploads: uploadsCount,
+		},
 	};
 }
 
@@ -587,7 +857,7 @@ function validateWebDavConfig(config: WebDavSyncConfig) {
 		throw new Error("WebDAV 地址不是有效 URL");
 	}
 	if (!config.filePath.trim()) {
-		throw new Error("请填写 WebDAV 备份路径");
+		throw new Error("请填写 WebDAV 备份目录");
 	}
 	if (!config.username.trim()) {
 		throw new Error("请填写 WebDAV 用户名");
@@ -601,9 +871,9 @@ function webDavAuthHeader(config: WebDavSyncConfig): string {
 	return `Basic ${Buffer.from(`${config.username}:${config.password}`).toString("base64")}`;
 }
 
-function buildWebDavUrl(baseUrl: string, filePath: string): string {
+function buildWebDavUrl(baseUrl: string, remotePath: string): string {
 	const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-	const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+	const encodedPath = remotePath.split("/").map(encodeURIComponent).join("/");
 	return new URL(encodedPath, base).toString();
 }
 
@@ -617,14 +887,107 @@ function buildWebDavDirectoryUrls(baseUrl: string, filePath: string): string[] {
 	return urls;
 }
 
+function formatCompactTimestamp(date: Date): string {
+	const y = date.getFullYear();
+	const m = String(date.getMonth() + 1).padStart(2, "0");
+	const d = String(date.getDate()).padStart(2, "0");
+	const hh = String(date.getHours()).padStart(2, "0");
+	const mm = String(date.getMinutes()).padStart(2, "0");
+	const ss = String(date.getSeconds()).padStart(2, "0");
+	return `${y}${m}${d}${hh}${mm}${ss}`;
+}
+
+function generateWebDavBackupFileName(date = new Date()): string {
+	return `${WEBDAV_BACKUP_FILE_PREFIX}-${formatCompactTimestamp(date)}${WEBDAV_BACKUP_FILE_SUFFIX}`;
+}
+
+function decodeHtmlEntities(input: string): string {
+	return input
+		.replace(/&amp;/g, "&")
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'");
+}
+
+function parseWebDavMultiStatus(xml: string, baseUrl: string): WebDavPropfindItem[] {
+	const responses =
+		xml.match(/<[^>]*:?response\b[\s\S]*?<\/[^>]*:?response>/gi) || [];
+	const list: WebDavPropfindItem[] = [];
+
+	for (const block of responses) {
+		const hrefMatch = block.match(
+			/<[^>]*:?href\b[^>]*>([\s\S]*?)<\/[^>]*:?href>/i,
+		);
+		if (!hrefMatch?.[1]) continue;
+		const rawHref = decodeHtmlEntities(hrefMatch[1].trim());
+
+		let pathname = "";
+		try {
+			pathname = decodeURIComponent(new URL(rawHref, baseUrl).pathname);
+		} catch {
+			continue;
+		}
+		const trimmedPath = pathname.replace(/\/+$/, "");
+		const name = trimmedPath.slice(trimmedPath.lastIndexOf("/") + 1);
+		if (!name) continue;
+
+		const propBlock =
+			block.match(
+				/<[^>]*:?prop\b[^>]*>([\s\S]*?)<\/[^>]*:?prop>/i,
+			)?.[1] || "";
+		const isCollection = /<[^>]*:?collection\b[^>]*\/?\s*>/i.test(propBlock);
+
+		const sizeText =
+			propBlock.match(
+				/<[^>]*:?getcontentlength\b[^>]*>([\s\S]*?)<\/[^>]*:?getcontentlength>/i,
+			)?.[1] || "";
+		const sizeNum = Number(sizeText.trim());
+
+		const createdAt =
+			propBlock.match(
+				/<[^>]*:?creationdate\b[^>]*>([\s\S]*?)<\/[^>]*:?creationdate>/i,
+			)?.[1]?.trim() || undefined;
+		const modifiedAt =
+			propBlock.match(
+				/<[^>]*:?getlastmodified\b[^>]*>([\s\S]*?)<\/[^>]*:?getlastmodified>/i,
+			)?.[1]?.trim() || undefined;
+
+		list.push({
+			href: rawHref,
+			isCollection,
+			size: Number.isFinite(sizeNum) ? sizeNum : undefined,
+			createdAt,
+			modifiedAt,
+		});
+	}
+
+	return list;
+}
+
+function normalizeWebDavEntryPath(
+	baseUrl: string,
+	href: string,
+	fallbackName: string,
+): string {
+	try {
+		const url = new URL(href, baseUrl);
+		const rawPath = decodeURIComponent(url.pathname);
+		const cleaned = rawPath.replace(/^\/+/, "").replace(/\/+$/, "");
+		return cleaned || fallbackName;
+	} catch {
+		return fallbackName;
+	}
+}
+
 async function readWebDavError(res: Response): Promise<string> {
 	const text = await res.text().catch(() => "");
 	return text.slice(0, 200) || `WebDAV 请求失败 (${res.status})`;
 }
 
-async function ensureWebDavDirectories(config: WebDavSyncConfig) {
+async function ensureWebDavDirectories(config: WebDavSyncConfig, dirPath: string) {
 	const auth = webDavAuthHeader(config);
-	for (const url of buildWebDavDirectoryUrls(config.url, config.filePath)) {
+	for (const url of buildWebDavDirectoryUrls(config.url, `${dirPath}/x`)) {
 		const res = await fetch(url, {
 			method: "MKCOL",
 			headers: { Authorization: auth },
@@ -637,13 +1000,66 @@ async function ensureWebDavDirectories(config: WebDavSyncConfig) {
 	}
 }
 
+async function listWebDavBackupFiles(
+	config: WebDavSyncConfig,
+): Promise<Array<WebDavBackupEntry & { isCollection: boolean }>> {
+	validateWebDavConfig(config);
+	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.webdav.filePath);
+	const targetDirUrl = buildWebDavUrl(config.url, `${baseDir}/`);
+	const res = await fetch(targetDirUrl, {
+		method: "PROPFIND",
+		headers: {
+			Authorization: webDavAuthHeader(config),
+			Depth: "1",
+			"Content-Type": "application/xml; charset=utf-8",
+		},
+		body: `<?xml version="1.0" encoding="utf-8" ?>\n<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /><d:getcontentlength /><d:creationdate /><d:getlastmodified /></d:prop></d:propfind>`,
+	});
+	if (res.status === 404) {
+		return [];
+	}
+	if (!res.ok && res.status !== 207) {
+		throw new Error(await readWebDavError(res));
+	}
+	const xml = await res.text();
+	const parsed = parseWebDavMultiStatus(xml, config.url);
+	if (parsed.length === 0) return [];
+
+	const normalizedDirPath = normalizeWebDavEntryPath(config.url, targetDirUrl, baseDir)
+		.replace(/\/+$/, "")
+		.toLowerCase();
+
+	const entries: Array<WebDavBackupEntry & { isCollection: boolean }> = [];
+	for (const item of parsed) {
+		const pathValue = normalizeWebDavEntryPath(config.url, item.href, "");
+		if (!pathValue) continue;
+		if (pathValue.replace(/\/+$/, "").toLowerCase() === normalizedDirPath) {
+			continue;
+		}
+		const name = pathValue.slice(pathValue.lastIndexOf("/") + 1);
+		if (!name) continue;
+		entries.push({
+			name,
+			path: pathValue,
+			size: item.size,
+			createdAt: item.createdAt,
+			modifiedAt: item.modifiedAt,
+			isCollection: item.isCollection,
+		});
+	}
+	return entries;
+}
+
 async function pushToWebDav(
 	config: WebDavSyncConfig,
 	zip: Buffer,
 ): Promise<string> {
 	validateWebDavConfig(config);
-	await ensureWebDavDirectories(config);
-	const target = buildWebDavUrl(config.url, config.filePath);
+	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.webdav.filePath);
+	await ensureWebDavDirectories(config, baseDir);
+	const filename = generateWebDavBackupFileName();
+	const targetPath = `${baseDir}/${filename}`;
+	const target = buildWebDavUrl(config.url, targetPath);
 	const res = await fetch(target, {
 		method: "PUT",
 		headers: {
@@ -660,9 +1076,21 @@ async function pushToWebDav(
 
 async function pullFromWebDav(
 	config: WebDavSyncConfig,
+	targetPathInput?: string,
 ): Promise<{ remote: string; zip: Buffer }> {
 	validateWebDavConfig(config);
-	const target = buildWebDavUrl(config.url, config.filePath);
+	const baseDir = normalizeRemotePath(config.filePath, DEFAULT_SYNC_CONFIG.webdav.filePath);
+	const normalizedTarget = normalizeWebDavTarget(targetPathInput);
+	if (!normalizedTarget) {
+		throw new Error("请选择要恢复的 WebDAV 备份文件");
+	}
+
+	const expectedPrefix = `${baseDir}/`.toLowerCase();
+	if (!normalizedTarget.toLowerCase().startsWith(expectedPrefix)) {
+		throw new Error("所选备份文件不在当前 WebDAV 备份目录下");
+	}
+
+	const target = buildWebDavUrl(config.url, normalizedTarget);
 	const res = await fetch(target, {
 		method: "GET",
 		headers: { Authorization: webDavAuthHeader(config) },
@@ -674,4 +1102,35 @@ async function pullFromWebDav(
 		remote: target,
 		zip: Buffer.from(await res.arrayBuffer()),
 	};
+}
+
+async function deleteWebDavBackupFile(
+	config: WebDavSyncConfig,
+	targetPathInput: string,
+): Promise<void> {
+	validateWebDavConfig(config);
+	const baseDir = normalizeRemotePath(
+		config.filePath,
+		DEFAULT_SYNC_CONFIG.webdav.filePath,
+	);
+	const normalizedTarget = normalizeWebDavTarget(targetPathInput);
+	if (!normalizedTarget) {
+		throw new Error("请选择要删除的 WebDAV 备份文件");
+	}
+	const expectedPrefix = `${baseDir}/`.toLowerCase();
+	if (!normalizedTarget.toLowerCase().startsWith(expectedPrefix)) {
+		throw new Error("所选备份文件不在当前 WebDAV 备份目录下");
+	}
+
+	const target = buildWebDavUrl(config.url, normalizedTarget);
+	const res = await fetch(target, {
+		method: "DELETE",
+		headers: { Authorization: webDavAuthHeader(config) },
+	});
+	if (res.status === 404) {
+		throw new Error("备份文件不存在或已被删除");
+	}
+	if (!res.ok) {
+		throw new Error(await readWebDavError(res));
+	}
 }

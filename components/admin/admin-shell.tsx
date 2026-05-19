@@ -220,9 +220,7 @@ function SaveButton() {
 			onPress={onPress}
 		>
 			<BiSave className="size-4" />
-			<span className="hidden sm:inline">
-				{saving ? "保存中..." : dirty ? "保存" : "已保存"}
-			</span>
+			<span>{saving ? "保存中..." : dirty ? "保存" : "已保存"}</span>
 		</Button>
 	);
 }

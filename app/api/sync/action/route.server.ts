@@ -20,9 +20,13 @@ export async function POST(req: Request) {
 		return NextResponse.json({ error: "未登录" }, { status: 401 });
 	}
 
-	let body: { provider?: unknown; action?: unknown };
+	let body: { provider?: unknown; action?: unknown; target?: unknown };
 	try {
-		body = (await req.json()) as { provider?: unknown; action?: unknown };
+		body = (await req.json()) as {
+			provider?: unknown;
+			action?: unknown;
+			target?: unknown;
+		};
 	} catch {
 		return NextResponse.json({ error: "invalid body" }, { status: 400 });
 	}
@@ -34,7 +38,9 @@ export async function POST(req: Request) {
 		);
 	}
 
-	const result = await runDataSync(body.provider, body.action);
+	const result = await runDataSync(body.provider, body.action, {
+		target: typeof body.target === "string" ? body.target : undefined,
+	});
 	if (result.ok && body.action === "pull") {
 		revalidatePath("/");
 	}
