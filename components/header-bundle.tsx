@@ -53,12 +53,7 @@ export function HeaderBundle({ showSearch }: { showSearch: boolean }) {
 	);
 
 	const header = showSearch ? (
-		<SearchHeader
-			name={name}
-			logo={logo}
-			onMenuOpen={openMenu}
-			onNavigate={onNavigate}
-		/>
+		<SearchHeader name={name} logo={logo} onMenuOpen={openMenu} />
 	) : (
 		<AppHeader
 			websiteName={name}
@@ -140,12 +135,10 @@ function SearchHeader({
 	name,
 	logo,
 	onMenuOpen,
-	onNavigate,
 }: {
 	name: string;
 	logo: string;
 	onMenuOpen: () => void;
-	onNavigate: (id: string) => void;
 }) {
 	const search = useAtomValue(searchConfigAtom);
 	const flatSites = useAtomValue(flatSitesAtom);
@@ -199,7 +192,6 @@ function SearchHeader({
 				enableTabFocus={search.enableTabFocus !== false}
 				placeholder={search.placeholder}
 				sites={flatSites}
-				onNavigate={onNavigate}
 				onMenuOpen={onMenuOpen}
 				engineId={engineId}
 				onEngineChange={setEngineId}

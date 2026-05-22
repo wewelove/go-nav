@@ -65,7 +65,6 @@ export function SearchBar({
 	enableTabFocus = true,
 	placeholder,
 	sites,
-	onNavigate,
 	engineId: externalEngineId,
 	onEngineChange,
 	showEngineSelector = true,
@@ -78,7 +77,6 @@ export function SearchBar({
 	enableTabFocus?: boolean;
 	placeholder: string;
 	sites: Array<NavSite & { categoryId: string; categoryName: string }>;
-	onNavigate?: (categoryId: string) => void;
 	engineId?: Key | null;
 	onEngineChange?: (id: Key | null) => void;
 	showEngineSelector?: boolean;
@@ -402,7 +400,6 @@ export function SearchBar({
 	};
 
 	const openLocalResult = (r: (typeof results)[number]) => {
-		onNavigate?.(r.categoryId);
 		recordVisit(r);
 		void openSiteWithPreference(r, {
 			linkTarget: layout?.linkTarget,
@@ -438,7 +435,7 @@ export function SearchBar({
 			e.currentTarget.blur();
 			return;
 		}
-		if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") {
+		if (e.key !== "ArrowDown" && e.key !== "ArrowUp") {
 			return;
 		}
 
@@ -458,20 +455,6 @@ export function SearchBar({
 			return;
 		}
 
-		if (activeIndex < 0) return;
-		if (isLocal) {
-			const selected = results[activeIndex];
-			if (!selected) return;
-			e.preventDefault();
-			openLocalResult(selected);
-			return;
-		}
-		if (showSuggestions) {
-			const selected = suggestions[activeIndex];
-			if (!selected) return;
-			e.preventDefault();
-			openSuggestion(selected);
-		}
 	};
 
 	const handleInputKeyDownCapture = (
@@ -498,25 +481,22 @@ export function SearchBar({
 				openLocalResult(results[Math.max(activeIndex, 0)] ?? results[0]);
 			}
 		} else {
+			if (showSuggestions && activeIndex >= 0) {
+				const selected = suggestions[activeIndex];
+				if (selected) {
+					openSuggestion(selected);
+					return;
+				}
+			}
 			runExternalSearch(q);
+			setIsOpen(false);
 		}
 	};
 
 	return (
 		<div ref={inputWrapRef} className="flex w-full items-center gap-2">
 			{showEngineSelector && (
-				<div
-					className="hidden w-30 shrink-0 min-[480px]:block"
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
-							const trigger = e.currentTarget.querySelector(
-								"[role=combobox]",
-							) as HTMLElement | null;
-							trigger?.click();
-						}
-					}}
-				>
+				<div className="hidden w-30 shrink-0 min-[480px]:block">
 					<Select
 						aria-label="选择搜索引擎"
 						className="w-full h-9"

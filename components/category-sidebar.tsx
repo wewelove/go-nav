@@ -119,15 +119,40 @@ export const CategorySidebar = memo(function CategorySidebar({
 		return ids;
 	}, [categories]);
 
+	const parentIdByCategoryId = useMemo(() => {
+		const map = new Map<string, string>();
+		for (const cat of categories) {
+			map.set(cat.id, cat.id);
+			if (!cat.children) continue;
+			for (const child of cat.children) {
+				map.set(child.id, cat.id);
+			}
+		}
+		return map;
+	}, [categories]);
+
 	const inDetailPage = pathname.startsWith("/site/");
 
 	const selectedId = useMemo(() => {
 		if (inDetailPage) return null;
-		if (!activeId || !allCategoryIds.has(activeId)) {
+		if (!activeId) {
+			return categories[0]?.id ?? null;
+		}
+		if (showSubcategoryTabs) {
+			return parentIdByCategoryId.get(activeId) ?? (categories[0]?.id ?? null);
+		}
+		if (!allCategoryIds.has(activeId)) {
 			return categories[0]?.id ?? null;
 		}
 		return activeId;
-	}, [activeId, allCategoryIds, categories, inDetailPage]);
+	}, [
+		activeId,
+		allCategoryIds,
+		categories,
+		inDetailPage,
+		parentIdByCategoryId,
+		showSubcategoryTabs,
+	]);
 
 	const selectedKeys: Selection = useMemo(() => {
 		if (!selectedId) return new Set();
@@ -232,6 +257,12 @@ export const CategorySidebar = memo(function CategorySidebar({
 				);
 			} else if (e.key === "Enter" && searchHighlightIndex >= 0) {
 				e.preventDefault();
+				e.stopPropagation();
+				(
+					e.nativeEvent as KeyboardEvent & {
+						stopImmediatePropagation?: () => void;
+					}
+				).stopImmediatePropagation?.();
 				const target = filteredCategories[searchHighlightIndex];
 				if (target) jumpTo(target.id);
 			}

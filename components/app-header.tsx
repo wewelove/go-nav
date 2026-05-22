@@ -22,7 +22,6 @@ export const AppHeader = memo(function AppHeader({
 	enableTabFocus = true,
 	placeholder = "",
 	sites = [],
-	onNavigate,
 	onMenuOpen,
 	engineId,
 	onEngineChange,
@@ -40,7 +39,6 @@ export const AppHeader = memo(function AppHeader({
 	enableTabFocus?: boolean;
 	placeholder?: string;
 	sites?: Array<NavSite & { categoryId: string; categoryName: string }>;
-	onNavigate?: (id: string) => void;
 	onMenuOpen: () => void;
 	engineId?: Key | null;
 	onEngineChange?: (id: Key | null) => void;
@@ -89,7 +87,6 @@ export const AppHeader = memo(function AppHeader({
 						enableTabFocus={enableTabFocus}
 						placeholder={placeholder}
 						sites={sites}
-						onNavigate={onNavigate}
 						engineId={engineId}
 						onEngineChange={onEngineChange}
 						showEngineSelector={showEngineSelector}

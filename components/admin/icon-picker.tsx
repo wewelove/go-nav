@@ -103,14 +103,15 @@ export function IconPicker({
 
 	const preview = (() => {
 		if (!value) return null;
-		const imageSrc = getIconImageSrc(value);
-		if (!imageSrc)
-			return <span className="text-xl leading-none text-center">{value}</span>;
-		// eslint-disable-next-line @next/next/no-img-element
-		return (
-			<img src={imageSrc} alt="" className="h-6 w-6 rounded object-contain" />
-		);
-	})();
+			const imageSrc = getIconImageSrc(value);
+			if (!imageSrc)
+				return <span className="text-xl leading-none text-center">{value}</span>;
+			return (
+				// 使用普通 img 渲染上传/外部图标预览，避免 next/image 对来源域名和尺寸策略的限制。
+				// eslint-disable-next-line @next/next/no-img-element
+				<img src={imageSrc} alt="" className="h-6 w-6 rounded object-contain" />
+			);
+		})();
 
 	return (
 		<div className="flex flex-col gap-1">

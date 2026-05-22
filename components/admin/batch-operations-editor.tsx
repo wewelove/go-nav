@@ -1147,6 +1147,8 @@ export function BatchOperationsEditor() {
 															(() => {
 																const iconSrc = getIconImageSrc(row.icon);
 																return iconSrc ? (
+																	// 图标来源可为用户上传地址/外链，列表中使用原生 img 以避免 next/image 额外约束。
+																	// eslint-disable-next-line @next/next/no-img-element
 																	<img
 																		src={iconSrc}
 																		alt={row.title}
