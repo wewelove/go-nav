@@ -192,7 +192,14 @@ export function AppLayout() {
 						} as React.CSSProperties
 					}
 				>
-					<main className="min-w-0 flex-1 py-2">
+					<main
+						className="min-w-0 flex-1 py-2"
+						style={
+							{
+								paddingBottom: "max(2.5rem, env(safe-area-inset-bottom))",
+							} as React.CSSProperties
+						}
+					>
 						{selectedEntry ? (
 							<SiteDetailPage entry={selectedEntry} layout={layout} />
 						) : isDetailRoute ? (

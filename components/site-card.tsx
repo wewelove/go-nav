@@ -28,6 +28,7 @@ export {
 } from "./site-icon";
 
 export interface SiteCardData {
+	id?: string;
 	url: string;
 	intranetUrl?: string;
 	title: string;
@@ -365,8 +366,21 @@ export const SiteGrid = memo(function SiteGrid({
 		return () => cancelIdle(id);
 	}, [needBatch, renderCount, total]);
 
-	if (!sites || total === 0) return null;
-	const visible = renderCount >= total ? sites : sites.slice(0, renderCount);
+	const visible = useMemo(() => {
+		if (!sites || total === 0) return [] as SiteCardData[];
+		return renderCount >= total ? sites : sites.slice(0, renderCount);
+	}, [renderCount, sites, total]);
+	const visibleKeys = useMemo(() => {
+		const seen = new Map<string, number>();
+		return visible.map((site, index) => {
+			const baseKey =
+				site.id?.trim() || site.url || `${site.title || "site"}-${index}`;
+			const count = seen.get(baseKey) ?? 0;
+			seen.set(baseKey, count + 1);
+			return count === 0 ? baseKey : `${baseKey}#${count}`;
+		});
+	}, [visible]);
+	if (total === 0) return null;
 	const isPreviewStyle = layout?.cardStyle === "preview";
 	const effectiveCardMinWidth = cardMinWidth;
 	const effectiveCardHeight = isPreviewStyle
@@ -382,9 +396,9 @@ export const SiteGrid = memo(function SiteGrid({
 					gridAutoRows: effectiveCardHeight,
 				}}
 			>
-				{visible.map((s) => (
+				{visible.map((s, index) => (
 					<SiteCard
-						key={`${s.title}-${s.url}`}
+						key={visibleKeys[index]}
 						site={s}
 						trackVisit={trackVisit}
 						layout={layout}

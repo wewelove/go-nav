@@ -1,6 +1,6 @@
 {
   "name": "go-nav",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "private": true,
   "packageManager": "pnpm@11.2.2",
   "scripts": {
@@ -38,7 +38,7 @@
     "fetch-jsonp": "^1.4.0",
     "jotai": "^2.20.0",
     "jotai-family": "^1.0.2",
-    "next": "16.3.0-canary.19",
+    "next": "16.3.0-canary.25",
     "pinyin-pro": "^3.28.1",
     "react": "19.2.6",
     "react-dom": "19.2.6",

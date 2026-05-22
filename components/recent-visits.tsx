@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@heroui/react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LayoutConfig } from "@/types";
 import { useRecentVisits } from "@/hooks/use-recent-visits";
 import { useSiteLinkMode } from "@/lib/client/site-link";
@@ -55,18 +55,36 @@ export const RecentVisits = memo(function RecentVisits({
 	const siteLinkMode = useSiteLinkMode();
 	const innerRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLDivElement>(null);
+	const displayCountRafRef = useRef(0);
+	const heightRafRef = useRef(0);
+	const lastGridWidthRef = useRef(0);
 	const [height, setHeight] = useState("0px");
 	const [visible, setVisible] = useState(disableEntranceAnimation);
 	const [displayCount, setDisplayCount] = useState(0);
 
 	const hasData = visits.length > 0;
-	const displayVisits = visits.slice(0, maxItems);
+	const displayVisits = useMemo(
+		() => visits.slice(0, maxItems),
+		[visits, maxItems],
+	);
 	const totalItems = displayVisits.length;
 	const gapPx = parseCssSizeToPx(sectionGap);
 	const isPreviewStyle = layout?.cardStyle === "preview";
 	const effectiveCardMinWidth = cardMinWidth;
 	const effectiveCardHeight = isPreviewStyle ? `calc(${cardHeight} * 2)` : cardHeight;
 	const minCardWidthPx = parseCssSizeToPx(cardMinWidth);
+
+	const scheduleHeightUpdate = useCallback(() => {
+		if (disableEntranceAnimation) return;
+		if (heightRafRef.current) cancelAnimationFrame(heightRafRef.current);
+		heightRafRef.current = requestAnimationFrame(() => {
+			heightRafRef.current = 0;
+			const el = innerRef.current;
+			if (!el) return;
+			const next = `${el.scrollHeight + gapPx}px`;
+			setHeight((prev) => (prev === next ? prev : next));
+		});
+	}, [disableEntranceAnimation, gapPx]);
 
 	useEffect(() => {
 		if (disableEntranceAnimation) {
@@ -80,11 +98,15 @@ export const RecentVisits = memo(function RecentVisits({
 	useEffect(() => {
 		if (!mounted || !visible) return;
 		const el = gridRef.current;
-		if (!el || totalItems === 0) return;
+		if (!el || totalItems === 0) {
+			setDisplayCount((prev) => (prev === 0 ? prev : 0));
+			return;
+		}
 
-		const update = () => {
-			const width = el.clientWidth;
+		const update = (width: number, force = false) => {
 			if (width === 0) return;
+			if (!force && Math.round(width) === lastGridWidthRef.current) return;
+			lastGridWidthRef.current = Math.round(width);
 
 			const cols = Math.max(
 				1,
@@ -98,39 +120,63 @@ export const RecentVisits = memo(function RecentVisits({
 			setDisplayCount((prev) => (prev === capped ? prev : capped));
 		};
 
-		update();
-		const observer = new ResizeObserver(update);
+		update(el.clientWidth, true);
+		const observer = new ResizeObserver((entries) => {
+			const width = entries[0]?.contentRect.width ?? el.clientWidth;
+			if (displayCountRafRef.current) {
+				cancelAnimationFrame(displayCountRafRef.current);
+			}
+			displayCountRafRef.current = requestAnimationFrame(() => {
+				displayCountRafRef.current = 0;
+				update(width);
+			});
+		});
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => {
+			observer.disconnect();
+			if (displayCountRafRef.current) {
+				cancelAnimationFrame(displayCountRafRef.current);
+				displayCountRafRef.current = 0;
+			}
+		};
 	}, [mounted, visible, totalItems, minCardWidthPx]);
 
 	useEffect(() => {
-		if (!mounted || !visible) return;
+		if (!mounted || !visible || disableEntranceAnimation) return;
 		const el = innerRef.current;
 		if (!el) return;
 
-		const observer = new ResizeObserver(() => {
-			const h = el.scrollHeight + gapPx;
-			const next = `${h}px`;
-			setHeight((prev) => (prev === next ? prev : next));
-		});
+		scheduleHeightUpdate();
+		const observer = new ResizeObserver(scheduleHeightUpdate);
 		observer.observe(el);
-		return () => observer.disconnect();
-	}, [mounted, visible, gapPx]);
+		return () => {
+			observer.disconnect();
+			if (heightRafRef.current) {
+				cancelAnimationFrame(heightRafRef.current);
+				heightRafRef.current = 0;
+			}
+		};
+	}, [disableEntranceAnimation, mounted, scheduleHeightUpdate, visible]);
 
 	useEffect(() => {
-		if (!mounted || !visible) return;
-		const el = innerRef.current;
-		if (el) {
-			const h = el.scrollHeight + gapPx;
-			const next = `${h}px`;
-			setHeight((prev) => (prev === next ? prev : next));
-		}
-	}, [mounted, visible, visits.length, gapPx, displayCount]);
+		if (!mounted || !visible || disableEntranceAnimation) return;
+		scheduleHeightUpdate();
+	}, [
+		disableEntranceAnimation,
+		displayCount,
+		mounted,
+		scheduleHeightUpdate,
+		visible,
+		visits.length,
+	]);
 
-	const visibleVisits = displayCount > 0
-		? displayVisits.slice(0, displayCount)
-		: displayVisits;
+	const visibleVisits = useMemo(
+		() =>
+			displayCount > 0
+				? displayVisits.slice(0, displayCount)
+				: displayVisits,
+		[displayCount, displayVisits],
+	);
 
 	if (!mounted || !hasData) return null;
 

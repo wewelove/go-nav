@@ -12,6 +12,7 @@ import {
 	useTransition,
 } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { pinyin } from "pinyin-pro";
 import type { LayoutConfig, NavSite, SearchEngine } from "@/types";
 import { recordVisit } from "@/hooks/use-recent-visits";
 import { openSiteWithPreference } from "@/lib/client/site-link";
@@ -28,6 +29,33 @@ interface BaiduSuggestionResponse {
 }
 
 const EMPTY_SUGGESTIONS: SuggestionItem[] = [];
+
+function getPinyinText(text: string) {
+	return pinyin(text, { toneType: "none", type: "array" }).join("");
+}
+
+function getPinyinInitials(text: string) {
+	return pinyin(text, { toneType: "none", type: "array" })
+		.map((item) => item.charAt(0))
+		.join("");
+}
+
+function getLocalSearchScore(
+	q: string,
+	entry: { title: string; titlePinyin: string; titleInitials: string; hay: string },
+) {
+	if (entry.title === q) return 0;
+	if (entry.titleInitials === q) return 1;
+	if (entry.titlePinyin === q) return 2;
+	if (entry.title.startsWith(q)) return 3;
+	if (entry.titleInitials.startsWith(q)) return 4;
+	if (entry.titlePinyin.startsWith(q)) return 5;
+	if (entry.title.includes(q)) return 6;
+	if (entry.titleInitials.includes(q)) return 7;
+	if (entry.titlePinyin.includes(q)) return 8;
+	if (entry.hay.includes(q)) return 20;
+	return Number.POSITIVE_INFINITY;
+}
 
 export function SearchBar({
 	engines,
@@ -118,23 +146,45 @@ export function SearchBar({
 
 	const isLocal = engineId === "local";
 
+	useEffect(() => {
+		if (!isLocal || !query.trim()) return;
+		setSearchIndexReady(true);
+	}, [isLocal, query]);
+
 	// 预建小写索引，避免每次按键都对全量 sites 重复 toLowerCase / 多字段拼接。
 	// 懒构建：仅在启用本地搜索时才构建；sites 引用稳定时只跑一次。
 	const searchIndex = useMemo(() => {
 		if (!enableLocal || !searchIndexReady)
 			return [] as Array<{
 				site: (typeof sites)[number];
+				title: string;
+				titlePinyin: string;
+				titleInitials: string;
 				hay: string;
 			}>;
-		const out = new Array<{ site: (typeof sites)[number]; hay: string }>(
-			sites.length,
-		);
+		const out = new Array<{
+			site: (typeof sites)[number];
+			title: string;
+			titlePinyin: string;
+			titleInitials: string;
+			hay: string;
+		}>(sites.length);
 		for (let i = 0; i < sites.length; i++) {
 			const s = sites[i];
+			const title = (s.title ?? "").toLowerCase();
+			const titlePinyin = getPinyinText(title).toLowerCase();
+			const titleInitials = getPinyinInitials(title).toLowerCase();
 			out[i] = {
 				site: s,
+				title,
+				titlePinyin,
+				titleInitials,
 				hay: (
-					(s.title ?? "") +
+					title +
+					"\u0001" +
+					titlePinyin +
+					"\u0001" +
+					titleInitials +
 					"\u0001" +
 					(s.description ?? "") +
 					"\u0001" +
@@ -156,14 +206,17 @@ export function SearchBar({
 		if (!isLocal) return [];
 		const q = deferredQuery.trim().toLowerCase();
 		if (!q) return [];
-		const out: Array<(typeof sites)[number]> = [];
+		const out: Array<{ site: (typeof sites)[number]; score: number; index: number }> = [];
 		for (let i = 0; i < searchIndex.length; i++) {
-			if (searchIndex[i].hay.includes(q)) {
-				out.push(searchIndex[i].site);
-				if (out.length >= 10) break;
+			const score = getLocalSearchScore(q, searchIndex[i]);
+			if (Number.isFinite(score)) {
+				out.push({ site: searchIndex[i].site, score, index: i });
 			}
 		}
-		return out;
+		return out
+			.sort((a, b) => a.score - b.score || a.index - b.index)
+			.slice(0, 10)
+			.map((item) => item.site);
 	}, [isLocal, deferredQuery, searchIndex]);
 
 	const showLocalResults = isLocal && isOpen && query.trim().length > 0;
@@ -426,8 +479,6 @@ export function SearchBar({
 	) => {
 		if (e.nativeEvent.isComposing) return;
 		if (e.key !== "Escape") return;
-		const keepValue = e.currentTarget.value;
-		e.preventDefault();
 		e.stopPropagation();
 		(
 			e.nativeEvent as KeyboardEvent & { stopImmediatePropagation?: () => void }
@@ -435,7 +486,6 @@ export function SearchBar({
 		setIsOpen(false);
 		setActiveIndex(-1);
 		requestAnimationFrame(() => {
-			setQuery(keepValue);
 			inputRef.current?.blur();
 		});
 	};
